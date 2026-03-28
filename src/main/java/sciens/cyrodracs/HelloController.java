@@ -56,9 +56,9 @@ public class HelloController {
             new DataFormElement("languages",  "Languages",          "multiSelect",  List.of("English","German","French","Spanish","Italian"),        6,  false, null, null, null),
             new DataFormElement("age",        "Age",                "inputNumber",  List.of(),                                                      6,  true,  null, null, null),
             new DataFormElement("satisfaction","Satisfaction",      "rating",       List.of(),                                                      6,  false, null, null, null),
-            new DataFormElement("experience", "Experience (years)", "slider",       List.of(),                                                      6,  true,  0.0,  30.0, null),
-            new DataFormElement("active",     "Active",             "toggle",       List.of(),                                                      6,  false, null, null, null),
             new DataFormElement("newsletter", "Newsletter",         "checkbox",     List.of(),                                                      6,  true,  null, null, null),
+            new DataFormElement("active",     "Active",             "toggle",       List.of(),                                                      6,  false, null, null, null),
+            new DataFormElement("experience", "Experience (years)", "slider",       List.of(),                                                      12, true,  0.0,  30.0, null),
             new DataFormElement("salutation", "Salutation",         "radioGroup",   List.of("Mr","Ms","Dr"),                                        6,  true,  null, null, null),
             new DataFormElement("interests",  "Interests",          "checkboxGroup",List.of("Sports","Music","Travel","Technology"),                 6,  false, null, null, null),
             new DataFormElement("notes",      "Notes",              "textarea",     List.of(),                                                      12, true,  null, null, 5)
