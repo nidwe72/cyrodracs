@@ -8,6 +8,7 @@ import sciens.cyrodracs.appconfig.persistence.AppConfigTypeEntity;
 import sciens.cyrodracs.appconfig.persistence.AppConfigTypeRepository;
 import sciens.cyrodracs.appconfig.service.AppConfigMutationService;
 
+import java.util.Arrays;
 import java.util.List;
 
 @RestController
@@ -55,6 +56,25 @@ public class AppConfigController {
         mutationService.deleteNode(id);
         store.reload();
         return ResponseEntity.ok(store.getAppConfig());
+    }
+
+    /** Returns the enum constant names for a given type code (e.g. DataFormElementType, DataFormEntityType). */
+    @GetMapping("/types/{typeCode}/enum-values")
+    public ResponseEntity<List<String>> getEnumValues(@PathVariable String typeCode) {
+        AppConfigTypeEntity type = typeRepo.findByCode(typeCode)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown type: " + typeCode));
+        if (!type.isEnumType() || type.getJavaType() == null) {
+            return ResponseEntity.badRequest().build();
+        }
+        try {
+            Class<?> enumClass = Class.forName(type.getJavaType());
+            List<String> values = Arrays.stream(enumClass.getEnumConstants())
+                    .map(c -> ((Enum<?>) c).name())
+                    .toList();
+            return ResponseEntity.ok(values);
+        } catch (ClassNotFoundException e) {
+            return ResponseEntity.internalServerError().build();
+        }
     }
 
     /** Updates the code and/or enumValue of a node. Returns the updated tree. */

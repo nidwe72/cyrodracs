@@ -6,6 +6,7 @@ import sciens.cyrodracs.appconfig.AppConfig;
 import sciens.cyrodracs.appconfig.DataForm;
 import sciens.cyrodracs.appconfig.DataFormElement;
 import sciens.cyrodracs.appconfig.DataFormElementType;
+import sciens.cyrodracs.appconfig.DataFormEntityType;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectEntity;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectRepository;
 
@@ -70,6 +71,9 @@ public class AppConfigTreeBuilder {
             if ("DataFormElement".equals(child.getType().getCode())) {
                 DataFormElement element = buildDataFormElement(child, childrenByParentId);
                 elements.put(element.getCode(), element);
+            } else if ("DataFormEntityType".equals(child.getType().getCode()) && child.getEnumValue() != null) {
+                form.setEntity(DataFormEntityType.valueOf(child.getEnumValue()));
+                form.setEntityNodeId(child.getId());
             }
         }
         form.setElements(elements);

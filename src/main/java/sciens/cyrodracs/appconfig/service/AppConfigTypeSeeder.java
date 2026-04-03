@@ -31,32 +31,35 @@ public class AppConfigTypeSeeder {
     }
 
     private void seedTypes() {
-        if (typeRepo.count() > 0) return;
-
-        AppConfigTypeEntity appConfigType = type("AppConfig", null, null, false, false,
+        AppConfigTypeEntity appConfigType = ensureType("AppConfig", null, null, false, false,
                 "sciens.cyrodracs.appconfig.AppConfig");
 
-        AppConfigTypeEntity dataFormType = type("DataForm", appConfigType, "dataForms", true, false,
+        AppConfigTypeEntity dataFormType = ensureType("DataForm", appConfigType, "dataForms", true, false,
                 "sciens.cyrodracs.appconfig.DataForm");
 
-        AppConfigTypeEntity dataFormElementType = type("DataFormElement", dataFormType, "elements", true, false,
+        AppConfigTypeEntity dataFormElementType = ensureType("DataFormElement", dataFormType, "elements", true, false,
                 "sciens.cyrodracs.appconfig.DataFormElement");
 
-        type("DataFormElementType", dataFormElementType, "type", false, true,
+        ensureType("DataFormElementType", dataFormElementType, "type", false, true,
                 "sciens.cyrodracs.appconfig.DataFormElementType");
+
+        ensureType("DataFormEntityType", dataFormType, "entity", false, true,
+                "sciens.cyrodracs.appconfig.DataFormEntityType");
     }
 
-    private AppConfigTypeEntity type(String code, AppConfigTypeEntity parent,
-                                     String fieldName, boolean collection,
-                                     boolean enumType, String javaType) {
-        AppConfigTypeEntity t = new AppConfigTypeEntity();
-        t.setCode(code);
-        t.setParentType(parent);
-        t.setFieldName(fieldName);
-        t.setCollection(collection);
-        t.setEnumType(enumType);
-        t.setJavaType(javaType);
-        return typeRepo.save(t);
+    private AppConfigTypeEntity ensureType(String code, AppConfigTypeEntity parent,
+                                           String fieldName, boolean collection,
+                                           boolean enumType, String javaType) {
+        return typeRepo.findByCode(code).orElseGet(() -> {
+            AppConfigTypeEntity t = new AppConfigTypeEntity();
+            t.setCode(code);
+            t.setParentType(parent);
+            t.setFieldName(fieldName);
+            t.setCollection(collection);
+            t.setEnumType(enumType);
+            t.setJavaType(javaType);
+            return typeRepo.save(t);
+        });
     }
 
     private void seedDefaultRootIfAbsent() {
