@@ -2,7 +2,8 @@ package sciens.cyrodracs.appconfig;
 
 public enum DataFormEntityType {
 
-    CAMERA_PRODUCER("sciens.cyrodracs.camera.CameraProducer");
+    CAMERA_PRODUCER("sciens.cyrodracs.camera.CameraProducer"),
+    CAMERA_LENS_MOUNT("sciens.cyrodracs.camera.CameraLensMount");
 
     private final String fqcn;
 

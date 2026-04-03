@@ -9,6 +9,7 @@ import sciens.cyrodracs.appconfig.DataForm;
 import sciens.cyrodracs.appconfig.DataFormData;
 
 import java.lang.reflect.Method;
+import java.time.YearMonth;
 import java.util.Map;
 
 @Service
@@ -150,6 +151,14 @@ public class DataFormPersistenceService {
         if (targetType == Integer.class || targetType == int.class) return Integer.valueOf(value.toString());
         if (targetType == Double.class || targetType == double.class) return Double.valueOf(value.toString());
         if (targetType == Boolean.class || targetType == boolean.class) return Boolean.valueOf(value.toString());
+        if (targetType == YearMonth.class) {
+            String s = value.toString();
+            // Accept full date (yyyy-MM-dd) by truncating to yyyy-MM
+            if (s.length() > 7 && s.charAt(4) == '-' && s.charAt(7) == '-') {
+                s = s.substring(0, 7);
+            }
+            return YearMonth.parse(s);
+        }
         return value;
     }
 }
