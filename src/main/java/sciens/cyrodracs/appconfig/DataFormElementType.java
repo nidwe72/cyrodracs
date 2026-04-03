@@ -1,0 +1,21 @@
+package sciens.cyrodracs.appconfig;
+
+public enum DataFormElementType {
+    INPUT_STRING,
+    INPUT_NUMBER,
+    INPUT_EMAIL,
+    INPUT_PASSWORD,
+    TEXTAREA,
+    SELECT,
+    MULTI_SELECT,
+    CHECKBOX_GROUP,
+    RADIO_GROUP,
+    CHECKBOX,
+    TOGGLE,
+    DATE_PICKER,
+    TIME_PICKER,
+    DATE_TIME_PICKER,
+    DATE_RANGE_PICKER,
+    SLIDER,
+    RATING
+}
