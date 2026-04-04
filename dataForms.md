@@ -10,13 +10,15 @@
   - `name` (String)
 - REST API: `GET /api/camera-producers` (list all), `DELETE /api/camera-producers/{id}` (delete)
 
-### Camera (future)
+### Camera
 - JPA entity mapped to a database table
 - Package: `sciens.cyrodracs.camera`
 - Attributes:
   - `id` (Long, auto-generated primary key)
   - `name` (String)
-  - `producer` (ManyToOne relationship to `CameraProducer`)
+  - `releaseYear` (YearMonth, custom converter)
+- REST API: `GET /api/cameras` (list all), `DELETE /api/cameras/{id}` (delete)
+- Future: `producer` (ManyToOne relationship to `CameraProducer`)
 
 ---
 
@@ -26,6 +28,8 @@
 - Maps entity keys to their fully qualified class names.
 - Entries:
   - `CAMERA_PRODUCER("sciens.cyrodracs.camera.CameraProducer")`
+  - `CAMERA_LENS_MOUNT("sciens.cyrodracs.camera.CameraLensMount")`
+  - `CAMERA("sciens.cyrodracs.camera.Camera")`
 - Each enum value carries a `fqcn` (String) property with the entity's fully qualified class name.
 
 ---

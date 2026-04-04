@@ -7,6 +7,7 @@ import sciens.cyrodracs.appconfig.AppConfig;
 import sciens.cyrodracs.appconfig.AppConfigStore;
 import sciens.cyrodracs.appconfig.DataForm;
 import sciens.cyrodracs.appconfig.DataFormData;
+import sciens.cyrodracs.appconfig.DataFormElement;
 
 import java.lang.reflect.Method;
 import java.time.YearMonth;
@@ -43,7 +44,7 @@ public class DataFormPersistenceService {
             }
         }
 
-        applyValues(entity, data.getValues());
+        applyValues(entity, form, data.getValues());
         entity = entityManager.merge(entity);
 
         Long persistedId = getId(entity);
@@ -67,7 +68,8 @@ public class DataFormPersistenceService {
         data.setEntityId(entityId);
 
         for (String fieldCode : form.getElements().keySet()) {
-            Object value = getProperty(entity, fieldCode);
+            String bindingPath = resolveBindingPath(form, fieldCode);
+            Object value = getProperty(entity, bindingPath);
             data.getValues().put(fieldCode, value);
         }
         return data;
@@ -96,10 +98,21 @@ public class DataFormPersistenceService {
         }
     }
 
-    private void applyValues(Object entity, Map<String, Object> values) {
+    private void applyValues(Object entity, DataForm form, Map<String, Object> values) {
         for (Map.Entry<String, Object> entry : values.entrySet()) {
-            setProperty(entity, entry.getKey(), entry.getValue());
+            String bindingPath = resolveBindingPath(form, entry.getKey());
+            setProperty(entity, bindingPath, entry.getValue());
         }
+    }
+
+    private String resolveBindingPath(DataForm form, String elementCode) {
+        DataFormElement element = form.getElements().get(elementCode);
+        if (element != null
+                && element.getDataBinding() != null
+                && !element.getDataBinding().isEmpty()) {
+            return element.getDataBinding();
+        }
+        return elementCode;
     }
 
     private void setProperty(Object entity, String fieldName, Object value) {

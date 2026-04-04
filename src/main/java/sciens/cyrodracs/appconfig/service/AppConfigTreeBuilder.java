@@ -90,6 +90,9 @@ public class AppConfigTreeBuilder {
             if ("DataFormElementType".equals(child.getType().getCode()) && child.getEnumValue() != null) {
                 element.setType(DataFormElementType.valueOf(child.getEnumValue()));
                 element.setTypeNodeId(child.getId());
+            } else if ("DataBinding".equals(child.getType().getCode())) {
+                element.setDataBinding(child.getCode());
+                element.setDataBindingNodeId(child.getId());
             }
         }
         return element;

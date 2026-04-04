@@ -43,6 +43,9 @@ public class AppConfigTypeSeeder {
         ensureType("DataFormElementType", dataFormElementType, "type", false, true,
                 "sciens.cyrodracs.appconfig.DataFormElementType");
 
+        ensureType("DataBinding", dataFormElementType, "dataBinding", false, false,
+                "java.lang.String");
+
         ensureType("DataFormEntityType", dataFormType, "entity", false, true,
                 "sciens.cyrodracs.appconfig.DataFormEntityType");
     }
