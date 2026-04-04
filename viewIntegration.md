@@ -238,7 +238,13 @@ When editing an ENTITY_LIST ViewNode, the admin can add/edit/delete TableColumn 
 - **header** — the display header text.
 - **renderer** — optional EntityRenderer reference (for relationship columns, e.g., to render `producer` as `"Nikon (1917-Now)"` instead of a raw ID).
 
-### V4.3 ViewNode Ordering
+### V4.3 ViewNode Copying
+
+ViewNodes support deep copy via the generic AppConfig node copy mechanism (see `dataBinding.md` Task 7). This enables a copy-then-modify workflow: copy an existing ViewNode (with all its tableColumns, children, etc.), then change the label, provider ref, or other fields.
+
+Typical workflow: copy the "Cameras" ViewNode, rename to "Nikon Cameras", change the entityProvider ref to point to the filtered "nikonCameras" provider.
+
+### V4.4 ViewNode Ordering
 
 ViewNodes within a collection should respect insertion order (the AppConfig tree already preserves order via `LinkedHashMap` and database insertion order). Future enhancement: drag-and-drop reordering with an explicit `sortOrder` field.
 
@@ -266,5 +272,7 @@ Task V3 depends on both V2 (data endpoint) and V1 (tree model in frontend).
 ### Cross-References
 
 - **EntityProvider** and **EntityRenderer** are defined in `dataBinding.md` Task 2 and reused here.
+- **EntityProvider Filter & Sort** is defined in `dataBinding.md` Task 6 — enables filtered ViewNodes like "Nikon cameras".
+- **Deep Copy** of AppConfig nodes is defined in `dataBinding.md` Task 7 — enables copy-then-modify for ViewNodes and EntityProviders.
 - **DataForm** (edit forms) are defined in `dataBinding.md` Task 1 and referenced by ENTITY_LIST ViewNodes.
 - **DataBindingService** proposals are reused for TableColumn key auto-completion.

@@ -85,4 +85,13 @@ public class AppConfigController {
         store.reload();
         return ResponseEntity.ok(store.getAppConfig());
     }
+
+    /** Deep-copies a node and all its descendants. Returns the updated tree. */
+    @PostMapping("/node/{id}/copy")
+    public ResponseEntity<AppConfig> copyNode(@PathVariable Long id,
+                                              @RequestBody CopyNodeRequest request) {
+        mutationService.copyNode(id, request.newCode());
+        store.reload();
+        return ResponseEntity.ok(store.getAppConfig());
+    }
 }

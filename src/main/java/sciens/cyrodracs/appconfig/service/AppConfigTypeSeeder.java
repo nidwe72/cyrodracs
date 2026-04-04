@@ -62,6 +62,39 @@ public class AppConfigTypeSeeder {
         ensureType("EntityProviderEntityType", entityProviderType, "entityType", false, true,
                 "sciens.cyrodracs.appconfig.DataFormEntityType");
 
+        // FilterNode types (child of EntityProvider)
+        AppConfigTypeEntity filterNodeType = ensureType("FilterNode", entityProviderType, "filter", false, false,
+                "sciens.cyrodracs.appconfig.FilterNode");
+
+        ensureType("FilterNodeType", filterNodeType, "type", false, true,
+                "sciens.cyrodracs.appconfig.FilterNodeType");
+
+        ensureType("FilterField", filterNodeType, "field", false, false,
+                "java.lang.String");
+
+        ensureType("FilterOperator", filterNodeType, "operator", false, true,
+                "sciens.cyrodracs.appconfig.FilterOperator");
+
+        ensureType("FilterValue", filterNodeType, "value", false, false,
+                "java.lang.String");
+
+        ensureType("FilterValueItem", filterNodeType, "values", true, false,
+                "java.lang.String");
+
+        // FilterNode children (recursive: child FilterNodes for AND_GROUP / OR_GROUP)
+        ensureType("FilterNodeChildren", filterNodeType, "children", true, false,
+                "sciens.cyrodracs.appconfig.FilterNode");
+
+        // SortField types (child of EntityProvider)
+        AppConfigTypeEntity sortFieldType = ensureType("SortField", entityProviderType, "sortFields", true, false,
+                "sciens.cyrodracs.appconfig.SortField");
+
+        ensureType("SortFieldField", sortFieldType, "field", false, false,
+                "java.lang.String");
+
+        ensureType("SortDirection", sortFieldType, "direction", false, true,
+                "sciens.cyrodracs.appconfig.SortDirection");
+
         // EntityRenderer types
         AppConfigTypeEntity entityRendererType = ensureType("EntityRenderer", appConfigType, "entityRenderers", true, false,
                 "sciens.cyrodracs.appconfig.EntityRenderer");

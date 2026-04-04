@@ -24,10 +24,13 @@ public class EntitySelectService {
 
     private final AppConfigStore appConfigStore;
     private final EntityManager entityManager;
+    private final FilterExecutor filterExecutor;
 
-    public EntitySelectService(AppConfigStore appConfigStore, EntityManager entityManager) {
+    public EntitySelectService(AppConfigStore appConfigStore, EntityManager entityManager,
+                               FilterExecutor filterExecutor) {
         this.appConfigStore = appConfigStore;
         this.entityManager = entityManager;
+        this.filterExecutor = filterExecutor;
     }
 
     @Transactional(readOnly = true)
@@ -54,9 +57,7 @@ public class EntitySelectService {
         }
 
         Class<?> entityClass = resolveClass(provider.getEntityType().getFqcn());
-        List<?> entities = entityManager
-                .createQuery("SELECT e FROM " + entityClass.getSimpleName() + " e")
-                .getResultList();
+        List<?> entities = filterExecutor.executeQuery(provider, entityClass);
 
         Template template = Mustache.compiler().compile(renderer.getTemplate());
 

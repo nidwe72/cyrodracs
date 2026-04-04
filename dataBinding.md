@@ -642,6 +642,389 @@ Task 5 (Generic List Endpoint) has been incorporated into the ViewTree data endp
 
 ---
 
+## Task 6 — EntityProvider: Configurable Filter & Sort
+
+**Goal:** Extend EntityProvider with a configurable filter tree (WHERE clauses) and sort order (ORDER BY), so providers can return filtered subsets of entities. This enables use cases like "all Nikon cameras" or "Nikon cameras from the 1960s" without custom code.
+
+### 6.1 Filter Model: Recursive FilterNode Tree
+
+A filter is a **recursive tree of FilterNodes**. Each node is either a **comparison** (leaf predicate) or a **logical group** (AND/OR with children).
+
+#### FilterNode types
+
+```java
+public enum FilterNodeType {
+    COMPARISON,    // leaf: field + operator + value
+    AND_GROUP,     // composite: all children must match
+    OR_GROUP       // composite: any child must match
+}
+```
+
+#### Comparison operators
+
+```java
+public enum FilterOperator {
+    EQUALS,
+    NOT_EQUALS,
+    GREATER_THAN,
+    GREATER_THAN_OR_EQUAL,
+    LESS_THAN,
+    LESS_THAN_OR_EQUAL,
+    IS_NULL,
+    IS_NOT_NULL,
+    IN,
+    LIKE
+}
+```
+
+#### In-memory model
+
+```java
+public class FilterNode implements Coded {
+    Long id;
+    String code;
+    FilterNodeType type;         // COMPARISON, AND_GROUP, OR_GROUP
+    Long typeNodeId;
+    String field;                // dot-path, e.g. "producer.name" (COMPARISON only)
+    Long fieldNodeId;
+    FilterOperator operator;     // EQUALS, IN, etc. (COMPARISON only)
+    Long operatorNodeId;
+    String value;                // single value as string (COMPARISON, non-IN)
+    Long valueNodeId;
+    List<String> values;         // multiple values (IN operator)
+    List<FilterNode> children;   // nested filters (AND_GROUP / OR_GROUP)
+}
+```
+
+### 6.2 Use Case Examples
+
+**`nikonCameras`** — single comparison, no grouping needed:
+
+```
+EntityProvider "nikonCameras"
+├── entityType: CAMERA
+└── filter (FilterNode)
+    ├── type: COMPARISON
+    ├── field: "producer.name"
+    ├── operator: EQUALS
+    └── value: "Nikon"
+```
+
+**`nikon60sCameras`** — AND group with three comparisons:
+
+```
+EntityProvider "nikon60sCameras"
+├── entityType: CAMERA
+└── filter (FilterNode)
+    ├── type: AND_GROUP
+    └── children:
+        ├── (FilterNode)
+        │   ├── type: COMPARISON
+        │   ├── field: "producer.name"
+        │   ├── operator: EQUALS
+        │   └── value: "Nikon"
+        ├── (FilterNode)
+        │   ├── type: COMPARISON
+        │   ├── field: "releaseYear"
+        │   ├── operator: GREATER_THAN_OR_EQUAL
+        │   └── value: "1960-01"
+        └── (FilterNode)
+            ├── type: COMPARISON
+            ├── field: "releaseYear"
+            ├── operator: LESS_THAN
+            └── value: "1970-01"
+```
+
+**Nested example** — "all Nikon or Canon cameras from the 60s":
+
+```
+filter (AND_GROUP)
+├── (OR_GROUP)
+│   ├── producer.name EQUALS "Nikon"
+│   └── producer.name EQUALS "Canon"
+└── (AND_GROUP)
+    ├── releaseYear GREATER_THAN_OR_EQUAL "1960-01"
+    └── releaseYear LESS_THAN "1970-01"
+```
+
+**IN clause** — "Cameras from Nikon, Canon, or Minolta":
+
+```
+filter (FilterNode)
+├── type: COMPARISON
+├── field: "producer.name"
+├── operator: IN
+└── values: ["Nikon", "Canon", "Minolta"]
+```
+
+### 6.3 Sort Model
+
+An EntityProvider can optionally define an ordered list of sort fields:
+
+```java
+public class SortField implements Coded {
+    Long id;
+    String code;
+    String field;        // dot-path, e.g. "releaseYear", "producer.name"
+    Long fieldNodeId;
+    SortDirection direction;  // ASC or DESC
+    Long directionNodeId;
+}
+
+public enum SortDirection {
+    ASC,
+    DESC
+}
+```
+
+**Example — Nikon cameras ordered by release year descending:**
+
+```
+EntityProvider "nikonCameras"
+├── entityType: CAMERA
+├── filter: { producer.name EQUALS "Nikon" }
+└── sortFields:
+    └── (SortField)
+        ├── field: "releaseYear"
+        └── direction: DESC
+```
+
+Multiple sort fields are applied in order (first field is primary sort, second is tiebreaker, etc.).
+
+### 6.4 AppConfig Tree Type Hierarchy
+
+**FilterNode types:**
+
+| code | parent | fieldName | collection | enum | javaType |
+|---|---|---|---|---|---|
+| `FilterNode` | `EntityProvider` | `filter` | false | false | `...appconfig.FilterNode` |
+| `FilterNodeType` | `FilterNode` | `type` | false | true | `...appconfig.FilterNodeType` |
+| `FilterField` | `FilterNode` | `field` | false | false | `java.lang.String` |
+| `FilterOperator` | `FilterNode` | `operator` | false | true | `...appconfig.FilterOperator` |
+| `FilterValue` | `FilterNode` | `value` | false | false | `java.lang.String` |
+| `FilterValueItem` | `FilterNode` | `values` | true | false | `java.lang.String` |
+| `FilterNodeChildren` | `FilterNode` | `children` | true | false | `...appconfig.FilterNode` |
+
+`FilterNode` is **self-referential** — an AND_GROUP or OR_GROUP's children are also FilterNodes. The recursive pattern is the same as ViewNode children.
+
+Note: `FilterNode` as a direct child of `EntityProvider` represents the root filter (single, non-collection). `FilterNodeChildren` enables nesting by making `FilterNode` a child of another `FilterNode`.
+
+**SortField types:**
+
+| code | parent | fieldName | collection | enum | javaType |
+|---|---|---|---|---|---|
+| `SortField` | `EntityProvider` | `sortFields` | true | false | `...appconfig.SortField` |
+| `SortFieldField` | `SortField` | `field` | false | false | `java.lang.String` |
+| `SortDirection` | `SortField` | `direction` | false | true | `...appconfig.SortDirection` |
+
+### 6.5 EntityProvider In-Memory Model Update
+
+```java
+public class EntityProvider implements Coded {
+    // ... existing fields ...
+    FilterNode filter;          // optional root filter (null = all entities)
+    List<SortField> sortFields; // optional sort order (empty = default/unordered)
+}
+```
+
+If `filter` is null/absent, the provider returns all entities (backward compatible with existing providers).
+
+### 6.6 Backend Execution: JPA Criteria API
+
+The `EntitySelectService` and `ViewDataService` translate the filter tree into JPA Criteria predicates:
+
+```java
+private Predicate buildPredicate(FilterNode node, Root<?> root, CriteriaBuilder cb) {
+    if (node.getType() == FilterNodeType.COMPARISON) {
+        Path<?> path = walkPath(root, node.getField());
+        return switch (node.getOperator()) {
+            case EQUALS                -> cb.equal(path, convert(node.getValue(), path));
+            case NOT_EQUALS            -> cb.notEqual(path, convert(node.getValue(), path));
+            case GREATER_THAN          -> cb.greaterThan(path.as(Comparable.class), ...);
+            case GREATER_THAN_OR_EQUAL -> cb.greaterThanOrEqualTo(...);
+            case LESS_THAN             -> cb.lessThan(...);
+            case LESS_THAN_OR_EQUAL    -> cb.lessThanOrEqualTo(...);
+            case IS_NULL               -> cb.isNull(path);
+            case IS_NOT_NULL           -> cb.isNotNull(path);
+            case IN                    -> path.in(convertValues(node.getValues(), path));
+            case LIKE                  -> cb.like(path.as(String.class), node.getValue());
+        };
+    } else {
+        List<Predicate> childPredicates = node.getChildren().stream()
+            .map(child -> buildPredicate(child, root, cb))
+            .toList();
+        return node.getType() == FilterNodeType.AND_GROUP
+            ? cb.and(childPredicates.toArray(new Predicate[0]))
+            : cb.or(childPredicates.toArray(new Predicate[0]));
+    }
+}
+```
+
+**Dot-path navigation** creates JPA joins: `"producer.name"` becomes `root.join("producer").get("name")`. Unlimited depth — each dot segment adds a join. This reuses the same metamodel navigation concept from `DataBindingService.walkPrefix()`.
+
+**Sort execution:**
+
+```java
+for (SortField sf : provider.getSortFields()) {
+    Path<?> path = walkPath(root, sf.getField());
+    query.orderBy(sf.getDirection() == SortDirection.ASC
+        ? cb.asc(path) : cb.desc(path));
+}
+```
+
+**Value type conversion:** Filter values are stored as strings. On execution, the backend converts them to the field's Java type using the existing `convertValue` logic from `DataFormPersistenceService` (String, Long, Integer, Double, Boolean, YearMonth, LocalDate, etc.). The field's Java type is known from the JPA metamodel path.
+
+### 6.7 Frontend: Filter Builder UI
+
+The admin editor shows a visual filter builder when editing an EntityProvider that has (or should have) a filter.
+
+#### Value input widgets — type-aware
+
+When the user selects a field via auto-proposals (from `DataBindingService`), the `BindingCompletion.javaType` determines which input widget to render for the value:
+
+| Field javaType | Value widget | Stored as |
+|---|---|---|
+| `String` | Text field | `"Nikon"` |
+| `Long`, `Integer` | Number field | `"42"` |
+| `Double`, `Float` | Decimal number field | `"3.14"` |
+| `Boolean` | Checkbox | `"true"` / `"false"` |
+| `YearMonth` | YearMonth picker (same as `_YearMonthField`) | `"1960-01"` |
+| `LocalDate` | Date picker (same as `_DateField`) | `"1960-01-15"` |
+| `LocalDateTime` | DateTime picker | `"1960-01-15T10:30"` |
+
+For IN operator, the multi-value input renders a list of values, each using the appropriate type-aware picker. Values can be added/removed individually.
+
+For IS_NULL / IS_NOT_NULL, no value input is shown (the operator is the entire predicate).
+
+#### Operator dropdown — type-filtered
+
+The available operators depend on the field's Java type:
+
+| Field category | Available operators |
+|---|---|
+| String | EQUALS, NOT_EQUALS, LIKE, IN, IS_NULL, IS_NOT_NULL |
+| Numeric (Long, Integer, Double) | EQUALS, NOT_EQUALS, GREATER_THAN, GREATER_THAN_OR_EQUAL, LESS_THAN, LESS_THAN_OR_EQUAL, IN, IS_NULL, IS_NOT_NULL |
+| Date/Time (YearMonth, LocalDate, LocalDateTime) | EQUALS, NOT_EQUALS, GREATER_THAN, GREATER_THAN_OR_EQUAL, LESS_THAN, LESS_THAN_OR_EQUAL, IS_NULL, IS_NOT_NULL |
+| Boolean | EQUALS, IS_NULL, IS_NOT_NULL |
+
+#### Filter tree structure
+
+The filter builder displays the FilterNode tree as an indented structure:
+
+```
+┌─ Filter ──────────────────────────────────────────┐
+│                                                    │
+│  AND                                    [+ Add]   │
+│  ├── producer.name  EQUALS  "Nikon"     [× Del]   │
+│  ├── releaseYear  >=  "1960-01"         [× Del]   │
+│  └── releaseYear  <   "1970-01"         [× Del]   │
+│                                                    │
+│  [+ Add condition]  [+ Add AND group]  [+ Add OR] │
+└────────────────────────────────────────────────────┘
+```
+
+- **Add condition** adds a COMPARISON child to the current group.
+- **Add AND group** / **Add OR group** adds a nested group.
+- Each comparison shows: field (with auto-proposals), operator (dropdown), value (type-aware widget).
+- Each node has a delete button.
+- The root can be either a single COMPARISON or a group. If the user adds a second condition at root level, the root automatically becomes an AND_GROUP wrapping both.
+
+#### Sort fields
+
+Below the filter, the admin can add sort fields:
+
+```
+┌─ Sort ────────────────────────────────────────────┐
+│  1. releaseYear  DESC                  [× Del]    │
+│  2. name         ASC                   [× Del]    │
+│  [+ Add sort field]                               │
+└────────────────────────────────────────────────────┘
+```
+
+Each sort field has: field (with auto-proposals), direction dropdown (ASC/DESC).
+
+---
+
+## Task 7 — Deep Copy of AppConfig Nodes
+
+**Goal:** Allow the admin to duplicate any AppConfig instance node (EntityProvider, ViewNode, etc.) along with all its descendants, producing an independent copy that can be modified without affecting the original. This enables a copy-then-modify workflow — e.g., copy the "all cameras" EntityProvider, rename to "nikonCameras", then add a filter.
+
+### 7.1 Motivation
+
+Creating derived configurations from scratch is tedious and error-prone. Common workflows:
+
+- **EntityProvider:** "Nikon cameras" is "all cameras" + a filter on `producer.name`. Copy the provider, add the filter.
+- **ViewNode:** "Nikon" tree node is the "Cameras" node with a different label and provider ref. Copy the ViewNode (including its tableColumns), change label and provider.
+- **General:** Any complex node with many children (DataForm with many elements, EntityRenderer, etc.) benefits from copy-then-modify.
+
+### 7.2 Backend: AppConfigMutationService.copyNode()
+
+New mutation operation that deep-copies a node and all its descendants:
+
+```java
+public Long copyNode(Long sourceNodeId, String newCode) {
+    // 1. Load the source AppConfigObjectEntity
+    // 2. Create a new entity with same type, same parent, code = newCode
+    // 3. Copy enumValue if present
+    // 4. Recursively copy all descendant nodes, maintaining parent-child relationships
+    // 5. Return the new root node's ID
+}
+```
+
+**Key behaviors:**
+
+- The copy gets the **same parent** as the source (sibling copy).
+- The copy's root node gets `code = newCode`. All descendant nodes retain their original codes (they are internal structure, not user-facing identifiers).
+- `enumValue` is copied on all nodes.
+- The operation is recursive — a ViewNode with children, tableColumns, and their sub-children all get copied.
+- The copy is fully independent — modifying it does not affect the original.
+
+### 7.3 Backend: REST Endpoint
+
+```
+POST /api/app-config/node/{id}/copy
+Body: { "newCode": "nikonCameras" }
+```
+
+Returns the updated AppConfig tree (same pattern as other mutations).
+
+### 7.4 Frontend: Copy Button in Admin Editor
+
+When an instance node is selected in the AppConfigDetailPanel, show a **Copy** button alongside Save and Delete:
+
+```
+[Save]  [Copy]  [Delete]
+```
+
+Clicking **Copy** opens a dialog asking for the new code:
+
+```
+┌──────────────────────────────────┐
+│ Copy "cameras"                   │
+│                                  │
+│ New code: [nikonCameras       ]  │
+│                                  │
+│            [Cancel]  [Copy]      │
+└──────────────────────────────────┘
+```
+
+After copying, the tree refreshes and the new node is selected for editing.
+
+### 7.5 Applicable Node Types
+
+The copy operation is generic — it works on any `AppConfigObjectEntity`. However, it is most useful on:
+
+| Node type | Typical workflow |
+|---|---|
+| `EntityProvider` | Copy provider, add/modify filter and sort |
+| `ViewNode` | Copy view node (with tableColumns and children), change label and provider ref |
+| `DataForm` | Copy form (with all elements), modify for a different entity or layout |
+| `EntityRenderer` | Copy renderer, tweak template |
+
+The Copy button appears on all deletable instance nodes (`isDeletable == true`).
+
+---
+
 ## Task Dependency Order
 
 ```
@@ -662,6 +1045,17 @@ Task 4 (Validation)                       ← Independent, can proceed anytime
   └── 4.3: Frontend validation
 
 Task 5 → Moved to viewIntegration.md (Task V2)
+
+Task 6 (EntityProvider Filter & Sort)     ← Depends on Task 2
+  ├── 6.1–6.5: Backend (FilterNode/SortField models, seeder types, tree builder,
+  │            EntityProvider model update)
+  ├── 6.6: Backend execution (JPA Criteria API predicates, sort, dot-path joins)
+  └── 6.7: Frontend (filter builder UI, type-aware value widgets, sort editor)
+
+Task 7 (Deep Copy of AppConfig Nodes)    ← Independent, can proceed anytime
+  ├── 7.2: Backend (AppConfigMutationService.copyNode, recursive deep copy)
+  ├── 7.3: Backend (REST endpoint POST /api/app-config/node/{id}/copy)
+  └── 7.4: Frontend (Copy button + new-code dialog in admin editor)
 ```
 
-Task 1 is the foundation — it introduces the `dataBinding` field, the JPA metamodel introspection, and the picker UI. Task 2 extends this to relationships and introduces EntityProvider/EntityRenderer. Task 4 (Validation) is independent. Tasks 3 and 5 are now part of `viewIntegration.md` as they concern the view/navigation layer.
+Task 6 depends on Task 2 (EntityProvider must exist). Task 7 is independent — it's a generic tree operation. The copy-then-modify workflow is especially useful in combination with Task 6: copy the "all cameras" provider, then add a filter to create "Nikon cameras". Same for ViewNodes: copy the "Cameras" view node, change label and provider ref.

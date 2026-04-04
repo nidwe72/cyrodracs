@@ -26,10 +26,13 @@ public class ViewDataService {
 
     private final AppConfigStore appConfigStore;
     private final EntityManager entityManager;
+    private final FilterExecutor filterExecutor;
 
-    public ViewDataService(AppConfigStore appConfigStore, EntityManager entityManager) {
+    public ViewDataService(AppConfigStore appConfigStore, EntityManager entityManager,
+                           FilterExecutor filterExecutor) {
         this.appConfigStore = appConfigStore;
         this.entityManager = entityManager;
+        this.filterExecutor = filterExecutor;
     }
 
     @Transactional(readOnly = true)
@@ -49,9 +52,7 @@ public class ViewDataService {
         }
 
         Class<?> entityClass = resolveClass(provider.getEntityType().getFqcn());
-        List<?> entities = entityManager
-                .createQuery("SELECT e FROM " + entityClass.getSimpleName() + " e")
-                .getResultList();
+        List<?> entities = filterExecutor.executeQuery(provider, entityClass);
 
         // Pre-compile renderers for columns that have them
         Map<String, Template> columnRenderers = new LinkedHashMap<>();

@@ -59,6 +59,31 @@ public class AppConfigMutationService {
         objectRepo.save(entity);
     }
 
+    @Transactional
+    public Long copyNode(Long sourceId, String newCode) {
+        AppConfigObjectEntity source = objectRepo.findById(sourceId)
+                .orElseThrow(() -> new IllegalArgumentException("Node not found: " + sourceId));
+        AppConfigObjectEntity copy = copyRecursive(source, source.getParentObject(), newCode);
+        return copy.getId();
+    }
+
+    private AppConfigObjectEntity copyRecursive(AppConfigObjectEntity source,
+                                                 AppConfigObjectEntity newParent,
+                                                 String overrideCode) {
+        AppConfigObjectEntity copy = new AppConfigObjectEntity();
+        copy.setType(source.getType());
+        copy.setCode(overrideCode != null ? overrideCode : source.getCode());
+        copy.setEnumValue(source.getEnumValue());
+        copy.setParentObject(newParent);
+        copy = objectRepo.save(copy);
+
+        List<AppConfigObjectEntity> children = objectRepo.findByParentObject(source);
+        for (AppConfigObjectEntity child : children) {
+            copyRecursive(child, copy, null);
+        }
+        return copy;
+    }
+
     private void deleteRecursive(AppConfigObjectEntity entity) {
         List<AppConfigObjectEntity> children = objectRepo.findByParentObject(entity);
         for (AppConfigObjectEntity child : children) {

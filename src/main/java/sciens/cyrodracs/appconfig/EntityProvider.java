@@ -1,11 +1,16 @@
 package sciens.cyrodracs.appconfig;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class EntityProvider implements Coded {
 
     private Long id;
     private String code;
     private DataFormEntityType entityType;
     private Long entityTypeNodeId;
+    private FilterNode filter;
+    private List<SortField> sortFields = new ArrayList<>();
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -20,4 +25,10 @@ public class EntityProvider implements Coded {
 
     public Long getEntityTypeNodeId() { return entityTypeNodeId; }
     public void setEntityTypeNodeId(Long entityTypeNodeId) { this.entityTypeNodeId = entityTypeNodeId; }
+
+    public FilterNode getFilter() { return filter; }
+    public void setFilter(FilterNode filter) { this.filter = filter; }
+
+    public List<SortField> getSortFields() { return sortFields; }
+    public void setSortFields(List<SortField> sortFields) { this.sortFields = sortFields; }
 }

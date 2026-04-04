@@ -9,6 +9,11 @@ import sciens.cyrodracs.appconfig.DataFormElementType;
 import sciens.cyrodracs.appconfig.DataFormEntityType;
 import sciens.cyrodracs.appconfig.EntityProvider;
 import sciens.cyrodracs.appconfig.EntityRenderer;
+import sciens.cyrodracs.appconfig.FilterNode;
+import sciens.cyrodracs.appconfig.FilterNodeType;
+import sciens.cyrodracs.appconfig.FilterOperator;
+import sciens.cyrodracs.appconfig.SortDirection;
+import sciens.cyrodracs.appconfig.SortField;
 import sciens.cyrodracs.appconfig.TableColumn;
 import sciens.cyrodracs.appconfig.ViewNode;
 import sciens.cyrodracs.appconfig.ViewNodeType;
@@ -134,12 +139,66 @@ public class AppConfigTreeBuilder {
         provider.setCode(entity.getCode());
 
         for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
-            if ("EntityProviderEntityType".equals(child.getType().getCode()) && child.getEnumValue() != null) {
+            String childTypeCode = child.getType().getCode();
+            if ("EntityProviderEntityType".equals(childTypeCode) && child.getEnumValue() != null) {
                 provider.setEntityType(DataFormEntityType.valueOf(child.getEnumValue()));
                 provider.setEntityTypeNodeId(child.getId());
+            } else if ("FilterNode".equals(childTypeCode)) {
+                provider.setFilter(buildFilterNode(child, childrenByParentId));
+            } else if ("SortField".equals(childTypeCode)) {
+                provider.getSortFields().add(buildSortField(child, childrenByParentId));
             }
         }
         return provider;
+    }
+
+    private FilterNode buildFilterNode(AppConfigObjectEntity entity,
+                                        Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        FilterNode node = new FilterNode();
+        node.setId(entity.getId());
+        node.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("FilterNodeType".equals(childTypeCode) && child.getEnumValue() != null) {
+                node.setType(FilterNodeType.valueOf(child.getEnumValue()));
+                node.setTypeNodeId(child.getId());
+            } else if ("FilterField".equals(childTypeCode)) {
+                node.setField(child.getCode());
+                node.setFieldNodeId(child.getId());
+            } else if ("FilterOperator".equals(childTypeCode) && child.getEnumValue() != null) {
+                node.setOperator(FilterOperator.valueOf(child.getEnumValue()));
+                node.setOperatorNodeId(child.getId());
+            } else if ("FilterValue".equals(childTypeCode)) {
+                node.setValue(child.getCode());
+                node.setValueNodeId(child.getId());
+            } else if ("FilterValueItem".equals(childTypeCode)) {
+                node.getValues().add(child.getCode());
+            } else if ("FilterNode".equals(childTypeCode)) {
+                // Recursive: child FilterNodes for AND_GROUP / OR_GROUP
+                node.getChildren().add(buildFilterNode(child, childrenByParentId));
+            }
+        }
+        return node;
+    }
+
+    private SortField buildSortField(AppConfigObjectEntity entity,
+                                      Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        SortField sortField = new SortField();
+        sortField.setId(entity.getId());
+        sortField.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("SortFieldField".equals(childTypeCode)) {
+                sortField.setField(child.getCode());
+                sortField.setFieldNodeId(child.getId());
+            } else if ("SortDirection".equals(childTypeCode) && child.getEnumValue() != null) {
+                sortField.setDirection(SortDirection.valueOf(child.getEnumValue()));
+                sortField.setDirectionNodeId(child.getId());
+            }
+        }
+        return sortField;
     }
 
     private EntityRenderer buildEntityRenderer(AppConfigObjectEntity entity,
