@@ -46,8 +46,31 @@ public class AppConfigTypeSeeder {
         ensureType("DataBinding", dataFormElementType, "dataBinding", false, false,
                 "java.lang.String");
 
+        ensureType("EntityProviderRef", dataFormElementType, "entityProviderRef", false, false,
+                "java.lang.String");
+
+        ensureType("EntityRendererRef", dataFormElementType, "entityRendererRef", false, false,
+                "java.lang.String");
+
         ensureType("DataFormEntityType", dataFormType, "entity", false, true,
                 "sciens.cyrodracs.appconfig.DataFormEntityType");
+
+        // EntityProvider types
+        AppConfigTypeEntity entityProviderType = ensureType("EntityProvider", appConfigType, "entityProviders", true, false,
+                "sciens.cyrodracs.appconfig.EntityProvider");
+
+        ensureType("EntityProviderEntityType", entityProviderType, "entityType", false, true,
+                "sciens.cyrodracs.appconfig.DataFormEntityType");
+
+        // EntityRenderer types
+        AppConfigTypeEntity entityRendererType = ensureType("EntityRenderer", appConfigType, "entityRenderers", true, false,
+                "sciens.cyrodracs.appconfig.EntityRenderer");
+
+        ensureType("EntityRendererEntityType", entityRendererType, "entityType", false, true,
+                "sciens.cyrodracs.appconfig.DataFormEntityType");
+
+        ensureType("EntityRendererTemplate", entityRendererType, "template", false, false,
+                "java.lang.String");
     }
 
     private AppConfigTypeEntity ensureType(String code, AppConfigTypeEntity parent,

@@ -120,7 +120,14 @@ public class DataFormPersistenceService {
         for (Method method : entity.getClass().getMethods()) {
             if (method.getName().equals(setterName) && method.getParameterCount() == 1) {
                 try {
-                    Object converted = convertValue(value, method.getParameterTypes()[0]);
+                    Class<?> paramType = method.getParameterTypes()[0];
+                    Object converted;
+                    if (isJpaEntity(paramType)) {
+                        // Relationship: value is the referenced entity's ID
+                        converted = resolveRelatedEntity(paramType, value);
+                    } else {
+                        converted = convertValue(value, paramType);
+                    }
                     method.invoke(entity, converted);
                     return;
                 } catch (ReflectiveOperationException e) {
@@ -137,7 +144,12 @@ public class DataFormPersistenceService {
         for (Method method : entity.getClass().getMethods()) {
             if (method.getName().equals(getterName) && method.getParameterCount() == 0) {
                 try {
-                    return method.invoke(entity);
+                    Object result = method.invoke(entity);
+                    // If the result is a JPA entity (relationship), extract its ID
+                    if (result != null && isJpaEntity(result.getClass())) {
+                        return getId(result);
+                    }
+                    return result;
                 } catch (ReflectiveOperationException e) {
                     throw new RuntimeException("Failed to get " + fieldName + " from " + entity.getClass().getSimpleName(), e);
                 }
@@ -145,6 +157,21 @@ public class DataFormPersistenceService {
         }
         throw new IllegalArgumentException("No getter found for field '" + fieldName
                 + "' on " + entity.getClass().getSimpleName());
+    }
+
+    private boolean isJpaEntity(Class<?> clazz) {
+        return clazz.isAnnotationPresent(jakarta.persistence.Entity.class);
+    }
+
+    private Object resolveRelatedEntity(Class<?> entityClass, Object idValue) {
+        if (idValue == null) return null;
+        Long id = Long.valueOf(idValue.toString());
+        Object related = entityManager.find(entityClass, id);
+        if (related == null) {
+            throw new IllegalArgumentException("Related entity not found: "
+                    + entityClass.getSimpleName() + " id=" + id);
+        }
+        return related;
     }
 
     private Long getId(Object entity) {

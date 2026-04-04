@@ -7,6 +7,8 @@ import sciens.cyrodracs.appconfig.DataForm;
 import sciens.cyrodracs.appconfig.DataFormElement;
 import sciens.cyrodracs.appconfig.DataFormElementType;
 import sciens.cyrodracs.appconfig.DataFormEntityType;
+import sciens.cyrodracs.appconfig.EntityProvider;
+import sciens.cyrodracs.appconfig.EntityRenderer;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectEntity;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectRepository;
 
@@ -50,13 +52,25 @@ public class AppConfigTreeBuilder {
         config.setCode(entity.getCode());
 
         Map<String, DataForm> dataForms = new LinkedHashMap<>();
+        Map<String, EntityProvider> entityProviders = new LinkedHashMap<>();
+        Map<String, EntityRenderer> entityRenderers = new LinkedHashMap<>();
+
         for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
-            if ("DataForm".equals(child.getType().getCode())) {
+            String typeCode = child.getType().getCode();
+            if ("DataForm".equals(typeCode)) {
                 DataForm form = buildDataForm(child, childrenByParentId);
                 dataForms.put(form.getCode(), form);
+            } else if ("EntityProvider".equals(typeCode)) {
+                EntityProvider provider = buildEntityProvider(child, childrenByParentId);
+                entityProviders.put(provider.getCode(), provider);
+            } else if ("EntityRenderer".equals(typeCode)) {
+                EntityRenderer renderer = buildEntityRenderer(child, childrenByParentId);
+                entityRenderers.put(renderer.getCode(), renderer);
             }
         }
         config.setDataForms(dataForms);
+        config.setEntityProviders(entityProviders);
+        config.setEntityRenderers(entityRenderers);
         return config;
     }
 
@@ -87,15 +101,56 @@ public class AppConfigTreeBuilder {
         element.setCode(entity.getCode());
 
         for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
-            if ("DataFormElementType".equals(child.getType().getCode()) && child.getEnumValue() != null) {
+            String childTypeCode = child.getType().getCode();
+            if ("DataFormElementType".equals(childTypeCode) && child.getEnumValue() != null) {
                 element.setType(DataFormElementType.valueOf(child.getEnumValue()));
                 element.setTypeNodeId(child.getId());
-            } else if ("DataBinding".equals(child.getType().getCode())) {
+            } else if ("DataBinding".equals(childTypeCode)) {
                 element.setDataBinding(child.getCode());
                 element.setDataBindingNodeId(child.getId());
+            } else if ("EntityProviderRef".equals(childTypeCode)) {
+                element.setEntityProviderRef(child.getCode());
+                element.setEntityProviderRefNodeId(child.getId());
+            } else if ("EntityRendererRef".equals(childTypeCode)) {
+                element.setEntityRendererRef(child.getCode());
+                element.setEntityRendererRefNodeId(child.getId());
             }
         }
         return element;
+    }
+
+    private EntityProvider buildEntityProvider(AppConfigObjectEntity entity,
+                                               Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        EntityProvider provider = new EntityProvider();
+        provider.setId(entity.getId());
+        provider.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            if ("EntityProviderEntityType".equals(child.getType().getCode()) && child.getEnumValue() != null) {
+                provider.setEntityType(DataFormEntityType.valueOf(child.getEnumValue()));
+                provider.setEntityTypeNodeId(child.getId());
+            }
+        }
+        return provider;
+    }
+
+    private EntityRenderer buildEntityRenderer(AppConfigObjectEntity entity,
+                                                Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        EntityRenderer renderer = new EntityRenderer();
+        renderer.setId(entity.getId());
+        renderer.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("EntityRendererEntityType".equals(childTypeCode) && child.getEnumValue() != null) {
+                renderer.setEntityType(DataFormEntityType.valueOf(child.getEnumValue()));
+                renderer.setEntityTypeNodeId(child.getId());
+            } else if ("EntityRendererTemplate".equals(childTypeCode)) {
+                renderer.setTemplate(child.getCode());
+                renderer.setTemplateNodeId(child.getId());
+            }
+        }
+        return renderer;
     }
 
     private List<AppConfigObjectEntity> childrenOf(Long parentId,

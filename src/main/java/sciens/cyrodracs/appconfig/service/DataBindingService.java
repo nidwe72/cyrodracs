@@ -63,13 +63,37 @@ public class DataBindingService {
                         attr.getName(),
                         javaType.getSimpleName(),
                         true,
-                        suggested
+                        suggested,
+                        null
+                ));
+            } else if (pat == Attribute.PersistentAttributeType.MANY_TO_ONE) {
+                Class<?> javaType = attr.getJavaType();
+                String referencedEntityType = resolveEntityTypeName(javaType);
+                completions.add(new BindingCompletion(
+                        attr.getName(),
+                        javaType.getSimpleName(),
+                        false,
+                        "ENTITY_SELECT",
+                        referencedEntityType
                 ));
             }
-            // Non-leaf (MANY_TO_ONE) will be added in Task 2
         }
 
         return new BindingProposalResponse(targetClass.getSimpleName(), completions);
+    }
+
+    /**
+     * Finds the DataFormEntityType enum name whose FQCN matches the given class.
+     * Returns null if no match found.
+     */
+    private String resolveEntityTypeName(Class<?> javaType) {
+        String fqcn = javaType.getName();
+        for (DataFormEntityType et : DataFormEntityType.values()) {
+            if (et.getFqcn().equals(fqcn)) {
+                return et.name();
+            }
+        }
+        return null;
     }
 
     private Class<?> resolveClass(DataFormEntityType entityType) {

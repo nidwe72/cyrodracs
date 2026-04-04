@@ -348,80 +348,249 @@ The `FormRendererView` does not need changes for this task. It already receives 
 
 ---
 
-## Task 2 — Entity Relationship Binding (ManyToOne)
+## Task 2 — Entity Relationship Binding (ManyToOne) with EntityProvider & EntityRenderer
 
-**Goal:** Allow a `DataFormElement` to bind to a `@ManyToOne` JPA relationship, rendered as a SELECT dropdown whose options are fetched from the related entity's table. Builds on the dataBinding infrastructure from Task 1.
+**Goal:** Allow a `DataFormElement` to bind to a `@ManyToOne` JPA relationship, rendered as a SELECT dropdown whose options come from a reusable **EntityProvider** (data source) and whose labels are formatted by a reusable **EntityRenderer** (Mustache template). Builds on the dataBinding infrastructure from Task 1.
 
 ### 2.1 Backend: Extend Binding Proposals for Relationships
 
-Extend `DataBindingService.getProposals()` to include `@ManyToOne` singular attributes (where `getPersistentAttributeType() == MANY_TO_ONE`). These appear in the proposals with a distinct marker:
+Extend `DataBindingService.getProposals()` to include `@ManyToOne` singular attributes (where `getPersistentAttributeType() == MANY_TO_ONE`). These appear in the proposals with `leaf: false` and a new `referencedEntityType` field:
 
 ```json
 {
-  "path": "producer",
+  "segment": "producer",
   "javaType": "CameraProducer",
+  "leaf": false,
   "suggestedElementType": "ENTITY_SELECT",
-  "relationship": true,
   "referencedEntityType": "CAMERA_PRODUCER"
 }
 ```
 
-The picker dialog (Task 1.6) shows these alongside primitive attributes, visually distinguished (e.g., with an icon or grouping).
+The `referencedEntityType` is resolved by scanning `DataFormEntityType` enum values for a matching FQCN. The picker dialog (Task 1.6) shows these alongside primitive attributes, visually distinguished with a relationship icon.
 
 ### 2.2 Backend: New DataFormElementType — ENTITY_SELECT
 
-Add `ENTITY_SELECT` to the `DataFormElementType` enum. This type indicates the field binds to a foreign-key relationship.
+Add `ENTITY_SELECT` to the `DataFormElementType` enum. This type indicates the field binds to a foreign-key relationship and uses an EntityProvider for its options.
 
-### 2.3 Backend: DataFormElement Relationship Metadata
+### 2.3 Backend: EntityProvider — Reusable Data Source
 
-When a `DataFormElement` has `dataBinding` pointing to a `@ManyToOne` attribute and type `ENTITY_SELECT`, it needs additional metadata stored as AppConfig child nodes:
+An `EntityProvider` is a **named, reusable** object at `AppConfig.entityProviders[code]` that defines which entities to retrieve. Multiple `DataFormElement`s can reference the same provider.
 
-- `referencedEntity` — a `DataFormEntityType` value identifying which entity provides the options (e.g., `CAMERA_PRODUCER`).
-- `referencedDisplayField` — the field code on the referenced entity used as the display label in the dropdown (e.g., `"name"`).
+**In-memory model:**
 
-These could be auto-populated when the user selects a relationship attribute in the picker dialog.
+```java
+public class EntityProvider implements Coded {
+    Long id;
+    String code;
+    DataFormEntityType entityType;  // which entity table to query
+    Long entityTypeNodeId;          // DB id of the EntityProviderEntityType child
+}
+```
 
-### 2.4 Backend: DataFormPersistenceService — Relationship Resolution
+**AppConfig tree structure:**
+
+```
+AppConfig
+├── dataForms: {...}
+└── entityProviders:
+    └── "allCameraProducers":       (EntityProvider node)
+        └── entityType: CAMERA_PRODUCER  (EntityProviderEntityType enum child)
+```
+
+**AppConfigType rows:**
+
+| code | parent | fieldName | collection | enum | javaType |
+|---|---|---|---|---|---|
+| `EntityProvider` | `AppConfig` | `entityProviders` | true | false | `sciens.cyrodracs.appconfig.EntityProvider` |
+| `EntityProviderEntityType` | `EntityProvider` | `entityType` | false | true | `sciens.cyrodracs.appconfig.DataFormEntityType` |
+
+For the first implementation, the provider retrieves **all** entities of the given type (no query filters). The query/filter builder is a future extension.
+
+### 2.4 Backend: EntityRenderer — Reusable Mustache Template
+
+An `EntityRenderer` is a **named, reusable** object at `AppConfig.entityRenderers[code]` that defines how to format a display label for each entity instance.
+
+**Template engine: jmustache** (`com.samskivert:jmustache`)
+
+Chosen because:
+- Simple field interpolation: `{{name}}`
+- Conditional sections: `{{#field}}...{{/field}}` — renders block only if field is non-null
+- Inverted sections: `{{^field}}...{{/field}}` — renders block only if field is null
+- Intentionally logic-less — no full programming language, just the right granularity
+- Single JAR, zero dependencies
+
+**Example template for CameraProducer:**
+
+```mustache
+{{name}}{{#foundationYear}} ({{foundationYear}}-{{#shutdownYear}}{{shutdownYear}}{{/shutdownYear}}{{^shutdownYear}}Now{{/shutdownYear}}){{/foundationYear}}
+```
+
+Results:
+- `{ name: "Nikon", foundationYear: "1917", shutdownYear: null }` → `Nikon (1917-Now)`
+- `{ name: "Minolta", foundationYear: "1928", shutdownYear: "2003" }` → `Minolta (1928-2003)`
+- `{ name: "Acme", foundationYear: null, shutdownYear: null }` → `Acme`
+
+**In-memory model:**
+
+```java
+public class EntityRenderer implements Coded {
+    Long id;
+    String code;
+    DataFormEntityType entityType;  // which entity type this renders
+    Long entityTypeNodeId;
+    String template;                // Mustache template string
+    Long templateNodeId;            // DB id of the template child node
+}
+```
+
+**AppConfig tree structure:**
+
+```
+AppConfig
+├── dataForms: {...}
+├── entityProviders: {...}
+└── entityRenderers:
+    └── "producerCaption":           (EntityRenderer node)
+        ├── entityType: CAMERA_PRODUCER  (EntityRendererEntityType enum child)
+        └── template: "{{name}}{{#foundationYear}} ({{foundationYear}}-...)"  (EntityRendererTemplate child)
+```
+
+**AppConfigType rows:**
+
+| code | parent | fieldName | collection | enum | javaType |
+|---|---|---|---|---|---|
+| `EntityRenderer` | `AppConfig` | `entityRenderers` | true | false | `sciens.cyrodracs.appconfig.EntityRenderer` |
+| `EntityRendererEntityType` | `EntityRenderer` | `entityType` | false | true | `sciens.cyrodracs.appconfig.DataFormEntityType` |
+| `EntityRendererTemplate` | `EntityRenderer` | `template` | false | false | `java.lang.String` |
+
+### 2.5 Backend: DataFormElement — Provider and Renderer References
+
+When a `DataFormElement` has type `ENTITY_SELECT`, it references an EntityProvider and an EntityRenderer by code, stored as AppConfig child nodes:
+
+```java
+public class DataFormElement implements Coded {
+    // ... existing fields ...
+    String entityProviderRef;       // code of the EntityProvider
+    Long entityProviderRefNodeId;
+    String entityRendererRef;       // code of the EntityRenderer
+    Long entityRendererRefNodeId;
+}
+```
+
+**AppConfigType rows:**
+
+| code | parent | fieldName | collection | enum | javaType |
+|---|---|---|---|---|---|
+| `EntityProviderRef` | `DataFormElement` | `entityProviderRef` | false | false | `java.lang.String` |
+| `EntityRendererRef` | `DataFormElement` | `entityRendererRef` | false | false | `java.lang.String` |
+
+### 2.6 Backend: EntitySelectService — Options Resolution
+
+New service `EntitySelectService` that combines an EntityProvider and EntityRenderer to produce dropdown options:
+
+```java
+@Service
+public class EntitySelectService {
+
+    /**
+     * Fetches all entities defined by the provider, renders each label
+     * using the renderer's Mustache template, and returns the options list.
+     */
+    public List<EntityOption> getOptions(String providerCode, String rendererCode) {
+        // 1. Look up EntityProvider and EntityRenderer from AppConfigStore
+        // 2. Resolve entity class from provider's entityType
+        // 3. Query all entities: entityManager.createQuery("SELECT e FROM X e").getResultList()
+        // 4. For each entity, build a Map<String, Object> of all attributes (via reflection)
+        // 5. Compile Mustache template, execute against the map
+        // 6. Return list of { id, label }
+    }
+}
+```
+
+**DTO:**
+
+```java
+public class EntityOption {
+    private Long id;
+    private String label;
+}
+```
+
+### 2.7 Backend: Options Endpoint
+
+```
+GET /api/entity-select/options?provider={providerCode}&renderer={rendererCode}
+```
+
+Returns:
+```json
+[
+  { "id": 1, "label": "Nikon (1917-Now)" },
+  { "id": 2, "label": "Canon (1937-Now)" },
+  { "id": 3, "label": "Minolta (1928-2003)" }
+]
+```
+
+### 2.8 Backend: DataFormPersistenceService — Relationship Resolution
 
 When saving a `DataFormData` where `dataBinding` maps to a `@ManyToOne` attribute:
 
 - The value in the map is the **ID** (Long) of the referenced entity.
-- The service resolves this to the actual JPA entity instance via `EntityManager.find()` before calling the setter.
+- The service detects the setter parameter is a JPA entity (not a primitive) and resolves it via `EntityManager.find()` before calling the setter.
 
 When loading:
 
-- The getter returns a JPA entity object. The service extracts its `id` and puts that into the values map.
+- The getter returns a JPA entity object. The service extracts its `id` (via `getId()`) and puts that into the values map.
 
-### 2.5 Backend: Options Endpoint
+### 2.9 Backend: Extend Camera Entity with Relationships
 
-```
-GET /api/data-binding/options/{entityType}?displayField={fieldCode}
-```
-
-Returns `[{ "id": 1, "label": "Nikon" }, { "id": 2, "label": "Canon" }]`.
-
-### 2.6 Frontend: ENTITY_SELECT Widget
-
-Add `entitySelect` to the Dart `DataFormElementType` enum. The `FormRendererView` renders it as a `DropdownButtonFormField` that:
-
-1. On init, fetches options from the backend endpoint.
-2. Displays `label` to the user, stores `id` as the form value.
-
-### 2.7 Extend Camera Entity with Relationships
-
-The `Camera` entity already exists with `id`, `name`, and `releaseYear`. Add `@ManyToOne` relationships as the first consumer of relationship binding:
+The `Camera` entity already exists with `id`, `name`, and `releaseYear`. Add a `@ManyToOne` relationship as the first consumer:
 
 ```java
 @ManyToOne
 @JoinColumn(name = "producer_id")
 private CameraProducer producer;
-
-@ManyToOne
-@JoinColumn(name = "lens_mount_id")
-private CameraLensMount lensMount;
 ```
 
 `CAMERA` is already registered in `DataFormEntityType`, `CameraController`, and `CameraRepository`.
+
+### 2.10 Frontend: ENTITY_SELECT Widget
+
+Add `entitySelect` to the Dart `DataFormElementType` enum. The `FormRendererView` renders it as a `DropdownButtonFormField` that:
+
+1. On init, fetches options from `GET /api/entity-select/options?provider=...&renderer=...`
+2. Displays `label` to the user, stores `id` as the form value.
+
+The `DataFormElement` model gains `entityProviderRef` and `entityRendererRef` fields, populated from the AppConfig tree.
+
+### 2.11 Frontend: Template Editor with Mustache Auto-Proposals
+
+When editing an `EntityRenderer` in the AppConfigEditorView, the template field provides auto-completion:
+
+1. When the user types `{{`, trigger a proposals dropdown using `DataBindingService.getProposals()` for the renderer's entity type.
+2. Show available fields with their types: `name (String)`, `foundationYear (YearMonth)`, etc.
+3. When the user types `{{#` or `{{^`, show the same proposals, indicating these are conditional/inverted blocks.
+4. On selecting a conditional field like `{{#shutdownYear}}`, auto-insert the closing `{{/shutdownYear}}` tag.
+
+No special library is needed for the frontend proposals — it reuses the same binding proposals endpoint (`GET /api/data-binding/proposals/{entityType}`), triggered by `{{` instead of `.`.
+
+### 2.12 Frontend: AppConfigEditorView — EntityProvider and EntityRenderer Editing
+
+The AppConfigEditorView is extended to manage EntityProvider and EntityRenderer nodes:
+
+**EntityProvider detail panel:**
+- Code field
+- Entity type dropdown (same `_kEntityValues` list)
+
+**EntityRenderer detail panel:**
+- Code field
+- Entity type dropdown
+- Template text field with Mustache auto-proposals (see 2.11)
+
+**DataFormElement detail panel (when type = ENTITY_SELECT):**
+- Existing code, type, dataBinding fields
+- EntityProvider ref dropdown (lists available EntityProvider codes)
+- EntityRenderer ref dropdown (lists available EntityRenderer codes)
 
 ---
 
@@ -530,9 +699,10 @@ Task 1 (dataBinding + Auto-Proposals)     ← DO FIRST
   ├── 1.5–1.6: Frontend (model update, config editor picker)
   └── 1.7: No FormRendererView changes needed
 
-Task 2 (Entity Relationships)             ← Depends on Task 1
-  ├── 2.1–2.5: Backend (extend proposals, ENTITY_SELECT, persistence, options endpoint)
-  └── 2.6–2.7: Frontend + Camera entity
+Task 2 (Entity Relationships + EntityProvider/Renderer)  ← Depends on Task 1
+  ├── 2.1–2.9: Backend (proposals, ENTITY_SELECT, EntityProvider, EntityRenderer,
+  │            jmustache templates, EntitySelectService, persistence, Camera entity)
+  └── 2.10–2.12: Frontend (ENTITY_SELECT widget, template editor, config panels)
 
 Task 3 (Backend-Driven Registry)          ← Independent of Tasks 1–2
   ├── 3.1–3.2: Backend metadata

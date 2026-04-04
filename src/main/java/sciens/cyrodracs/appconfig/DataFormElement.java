@@ -11,6 +11,14 @@ public class DataFormElement implements Coded {
     private String dataBinding;
     /** DB id of the DataBinding child object in the config tree. */
     private Long dataBindingNodeId;
+    /** Code of the EntityProvider referenced by this ENTITY_SELECT element. */
+    private String entityProviderRef;
+    /** DB id of the EntityProviderRef child object. */
+    private Long entityProviderRefNodeId;
+    /** Code of the EntityRenderer referenced by this ENTITY_SELECT element. */
+    private String entityRendererRef;
+    /** DB id of the EntityRendererRef child object. */
+    private Long entityRendererRefNodeId;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -31,4 +39,16 @@ public class DataFormElement implements Coded {
 
     public Long getDataBindingNodeId() { return dataBindingNodeId; }
     public void setDataBindingNodeId(Long dataBindingNodeId) { this.dataBindingNodeId = dataBindingNodeId; }
+
+    public String getEntityProviderRef() { return entityProviderRef; }
+    public void setEntityProviderRef(String entityProviderRef) { this.entityProviderRef = entityProviderRef; }
+
+    public Long getEntityProviderRefNodeId() { return entityProviderRefNodeId; }
+    public void setEntityProviderRefNodeId(Long entityProviderRefNodeId) { this.entityProviderRefNodeId = entityProviderRefNodeId; }
+
+    public String getEntityRendererRef() { return entityRendererRef; }
+    public void setEntityRendererRef(String entityRendererRef) { this.entityRendererRef = entityRendererRef; }
+
+    public Long getEntityRendererRefNodeId() { return entityRendererRefNodeId; }
+    public void setEntityRendererRefNodeId(Long entityRendererRefNodeId) { this.entityRendererRefNodeId = entityRendererRefNodeId; }
 }

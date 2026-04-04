@@ -18,6 +18,10 @@ public class Camera {
     @Convert(converter = YearMonthConverter.class)
     private YearMonth releaseYear;
 
+    @ManyToOne
+    @JoinColumn(name = "producer_id")
+    private CameraProducer producer;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -26,4 +30,7 @@ public class Camera {
 
     public YearMonth getReleaseYear() { return releaseYear; }
     public void setReleaseYear(YearMonth releaseYear) { this.releaseYear = releaseYear; }
+
+    public CameraProducer getProducer() { return producer; }
+    public void setProducer(CameraProducer producer) { this.producer = producer; }
 }
