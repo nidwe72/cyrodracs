@@ -160,7 +160,14 @@ public class DataFormPersistenceService {
     }
 
     private boolean isJpaEntity(Class<?> clazz) {
-        return clazz.isAnnotationPresent(jakarta.persistence.Entity.class);
+        Class<?> current = clazz;
+        while (current != null && current != Object.class) {
+            if (current.isAnnotationPresent(jakarta.persistence.Entity.class)) {
+                return true;
+            }
+            current = current.getSuperclass();
+        }
+        return false;
     }
 
     private Object resolveRelatedEntity(Class<?> entityClass, Object idValue) {

@@ -14,13 +14,13 @@ Currently, `DataFormElement.code` serves double duty: it is both the element's i
 
 3. **No relationship support.** Entities have only scalar attributes. The `Camera` entity currently has only primitives (`name`, `releaseYear`) but will need a `@ManyToOne` reference to `CameraProducer`. Neither the form model, the persistence layer, nor the frontend can express or resolve entity relationships yet.
 
-4. **Hard-coded entity registry in frontend.** `_entityDefs` in `app_view.dart` duplicates knowledge that already exists in the backend AppConfig tree (`DataFormEntityType` enum, `DataForm` definitions with their elements). Adding a new entity type requires editing both backend and frontend code.
+4. **Hard-coded entity registry in frontend.** → Addressed in `viewIntegration.md` (ViewTree).
 
 5. **No validation model.** DataFormElement has a type but no validation rules (required, min/max length, pattern, unique). The frontend does no field validation; the backend relies on JPA/DB constraints.
 
 6. **No SELECT element data source.** `DataFormElementType.SELECT` exists but has no way to specify where its options come from (e.g., "all CameraProducer entities" for a foreign-key dropdown). Options are currently only a static `List<String>` on `DataFormElement`.
 
-7. **Table column definitions are client-side only.** The backend has no concept of which entity attributes should appear in a list/table view; this is hard-coded per `_EntityDef`.
+7. **Table column definitions are client-side only.** → Addressed in `viewIntegration.md` (ViewTree).
 
 ---
 
@@ -594,38 +594,9 @@ The AppConfigEditorView is extended to manage EntityProvider and EntityRenderer 
 
 ---
 
-## Task 3 — Backend-Driven Entity Registry
+## Task 3 — Moved to viewIntegration.md
 
-**Goal:** Eliminate the hard-coded `_entityDefs` in the frontend. Derive entity list, API path, and table column definitions from the backend AppConfig.
-
-### 3.1 Backend: EntityProvider Config
-
-Introduce an `EntityProvider` concept in the AppConfig tree. Each `DataForm` that has an `entity` binding implicitly defines an entity provider. The backend should expose metadata sufficient for the frontend to render:
-
-- The entity label (derived from `DataFormEntityType` name or a new display-name field).
-- The REST API path for list/delete operations (convention-based or explicitly configured).
-- The table columns to display (derived from the DataForm's elements, or from a separate column list).
-
-### 3.2 Backend: Entity Metadata Endpoint
-
-Extend `GET /api/app-config` response (or add a new endpoint) to include for each entity-bound DataForm:
-
-```json
-{
-  "code": "cameraProducerForm",
-  "entityType": "CAMERA_PRODUCER",
-  "apiBasePath": "/api/camera-producers",
-  "tableColumns": [
-    { "key": "id", "header": "ID" },
-    { "key": "name", "header": "Name" },
-    { "key": "foundationYear", "header": "Foundation" }
-  ]
-}
-```
-
-### 3.3 Frontend: Dynamic AppView
-
-Replace the hard-coded `_entityDefs` with entity definitions fetched from the backend. The tree in AppView should be built from the AppConfig response. Adding a new entity type + DataForm in the admin config editor should automatically make it appear in the App tab without any frontend code changes.
+Task 3 (Backend-Driven Entity Registry) has been superseded by the ViewTree concept. See `viewIntegration.md` Tasks V1–V4 for the expanded specification covering configurable navigation, entity tables, nestable groups, static pages, and generic view data endpoints.
 
 ---
 
@@ -665,55 +636,32 @@ Extend `DataFormElement` (in both AppConfig tree and in-memory model) with optio
 
 ---
 
-## Task 5 — Generic List Endpoint
+## Task 5 — Moved to viewIntegration.md
 
-**Goal:** Replace per-entity list/delete controllers with a single generic endpoint that works for any `DataFormEntityType`.
-
-### 5.1 Generic List Endpoint
-
-```
-GET /api/entities/{entityType}
-```
-
-Where `entityType` is the `DataFormEntityType` enum value (e.g., `CAMERA_PRODUCER`). The service resolves the FQCN, queries via `EntityManager`, and returns a list of maps (field code to value) for all instances.
-
-### 5.2 Generic Delete Endpoint
-
-```
-DELETE /api/entities/{entityType}/{id}
-```
-
-Resolves entity class from `DataFormEntityType`, finds by ID, removes.
-
-### 5.3 Retire Per-Entity Controllers
-
-Once the generic endpoints are in place, `CameraProducerController`, `CameraLensMountController`, and future entity controllers become unnecessary. The frontend switches to the generic endpoints.
+Task 5 (Generic List Endpoint) has been incorporated into the ViewTree data endpoint. See `viewIntegration.md` Task V2 for the view-aware generic list/delete endpoints with column rendering.
 
 ---
 
 ## Task Dependency Order
 
 ```
-Task 1 (dataBinding + Auto-Proposals)     ← DO FIRST
+Task 1 (dataBinding + Auto-Proposals)     ← DONE
   ├── 1.1–1.4: Backend (service, endpoint, AppConfig tree, persistence update)
   ├── 1.5–1.6: Frontend (model update, config editor picker)
   └── 1.7: No FormRendererView changes needed
 
-Task 2 (Entity Relationships + EntityProvider/Renderer)  ← Depends on Task 1
+Task 2 (Entity Relationships + EntityProvider/Renderer)  ← DONE
   ├── 2.1–2.9: Backend (proposals, ENTITY_SELECT, EntityProvider, EntityRenderer,
   │            jmustache templates, EntitySelectService, persistence, Camera entity)
   └── 2.10–2.12: Frontend (ENTITY_SELECT widget, template editor, config panels)
 
-Task 3 (Backend-Driven Registry)          ← Independent of Tasks 1–2
-  ├── 3.1–3.2: Backend metadata
-  └── 3.3: Frontend dynamic AppView
+Task 3 → Moved to viewIntegration.md (Tasks V1–V4)
 
-Task 4 (Validation)                       ← Independent of Tasks 1–2
+Task 4 (Validation)                       ← Independent, can proceed anytime
   ├── 4.1–4.2: Backend validation model + enforcement
   └── 4.3: Frontend validation
 
-Task 5 (Generic List Endpoint)            ← Depends on Task 3
-  └── 5.1–5.3: Sequential
+Task 5 → Moved to viewIntegration.md (Task V2)
 ```
 
-Task 1 is the foundation — it introduces the `dataBinding` field, the JPA metamodel introspection, and the picker UI. Task 2 extends this to relationships. Tasks 3 and 4 can proceed in parallel with Tasks 1–2. Task 5 follows after Task 3.
+Task 1 is the foundation — it introduces the `dataBinding` field, the JPA metamodel introspection, and the picker UI. Task 2 extends this to relationships and introduces EntityProvider/EntityRenderer. Task 4 (Validation) is independent. Tasks 3 and 5 are now part of `viewIntegration.md` as they concern the view/navigation layer.

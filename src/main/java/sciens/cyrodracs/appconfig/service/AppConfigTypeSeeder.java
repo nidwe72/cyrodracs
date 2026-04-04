@@ -71,6 +71,42 @@ public class AppConfigTypeSeeder {
 
         ensureType("EntityRendererTemplate", entityRendererType, "template", false, false,
                 "java.lang.String");
+
+        // ViewTree types
+        AppConfigTypeEntity viewNodeType = ensureType("ViewNode", appConfigType, "viewTree", true, false,
+                "sciens.cyrodracs.appconfig.ViewNode");
+
+        ensureType("ViewNodeType", viewNodeType, "type", false, true,
+                "sciens.cyrodracs.appconfig.ViewNodeType");
+
+        ensureType("ViewNodeLabel", viewNodeType, "label", false, false,
+                "java.lang.String");
+
+        ensureType("ViewNodeProviderRef", viewNodeType, "entityProviderRef", false, false,
+                "java.lang.String");
+
+        ensureType("ViewNodeDataFormRef", viewNodeType, "dataFormRef", false, false,
+                "java.lang.String");
+
+        ensureType("ViewNodeContent", viewNodeType, "content", false, false,
+                "java.lang.String");
+
+        // ViewNode children (recursive: parent is ViewNode, child type is also ViewNode)
+        ensureType("ViewNodeChildren", viewNodeType, "children", true, false,
+                "sciens.cyrodracs.appconfig.ViewNode");
+
+        // TableColumn types
+        AppConfigTypeEntity tableColumnType = ensureType("TableColumn", viewNodeType, "tableColumns", true, false,
+                "sciens.cyrodracs.appconfig.TableColumn");
+
+        ensureType("TableColumnKey", tableColumnType, "key", false, false,
+                "java.lang.String");
+
+        ensureType("TableColumnHeader", tableColumnType, "header", false, false,
+                "java.lang.String");
+
+        ensureType("TableColumnRendererRef", tableColumnType, "entityRendererRef", false, false,
+                "java.lang.String");
     }
 
     private AppConfigTypeEntity ensureType(String code, AppConfigTypeEntity parent,

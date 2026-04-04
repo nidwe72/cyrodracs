@@ -9,6 +9,9 @@ import sciens.cyrodracs.appconfig.DataFormElementType;
 import sciens.cyrodracs.appconfig.DataFormEntityType;
 import sciens.cyrodracs.appconfig.EntityProvider;
 import sciens.cyrodracs.appconfig.EntityRenderer;
+import sciens.cyrodracs.appconfig.TableColumn;
+import sciens.cyrodracs.appconfig.ViewNode;
+import sciens.cyrodracs.appconfig.ViewNodeType;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectEntity;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectRepository;
 
@@ -54,6 +57,7 @@ public class AppConfigTreeBuilder {
         Map<String, DataForm> dataForms = new LinkedHashMap<>();
         Map<String, EntityProvider> entityProviders = new LinkedHashMap<>();
         Map<String, EntityRenderer> entityRenderers = new LinkedHashMap<>();
+        Map<String, ViewNode> viewTree = new LinkedHashMap<>();
 
         for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
             String typeCode = child.getType().getCode();
@@ -66,11 +70,15 @@ public class AppConfigTreeBuilder {
             } else if ("EntityRenderer".equals(typeCode)) {
                 EntityRenderer renderer = buildEntityRenderer(child, childrenByParentId);
                 entityRenderers.put(renderer.getCode(), renderer);
+            } else if ("ViewNode".equals(typeCode)) {
+                ViewNode viewNode = buildViewNode(child, childrenByParentId);
+                viewTree.put(viewNode.getCode(), viewNode);
             }
         }
         config.setDataForms(dataForms);
         config.setEntityProviders(entityProviders);
         config.setEntityRenderers(entityRenderers);
+        config.setViewTree(viewTree);
         return config;
     }
 
@@ -151,6 +159,61 @@ public class AppConfigTreeBuilder {
             }
         }
         return renderer;
+    }
+
+    private ViewNode buildViewNode(AppConfigObjectEntity entity,
+                                    Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        ViewNode node = new ViewNode();
+        node.setId(entity.getId());
+        node.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("ViewNodeType".equals(childTypeCode) && child.getEnumValue() != null) {
+                node.setType(ViewNodeType.valueOf(child.getEnumValue()));
+                node.setTypeNodeId(child.getId());
+            } else if ("ViewNodeLabel".equals(childTypeCode)) {
+                node.setLabel(child.getCode());
+                node.setLabelNodeId(child.getId());
+            } else if ("ViewNodeProviderRef".equals(childTypeCode)) {
+                node.setEntityProviderRef(child.getCode());
+                node.setEntityProviderRefNodeId(child.getId());
+            } else if ("ViewNodeDataFormRef".equals(childTypeCode)) {
+                node.setDataFormRef(child.getCode());
+                node.setDataFormRefNodeId(child.getId());
+            } else if ("ViewNodeContent".equals(childTypeCode)) {
+                node.setContent(child.getCode());
+                node.setContentNodeId(child.getId());
+            } else if ("ViewNode".equals(childTypeCode)) {
+                // Recursive: child ViewNodes (GROUP children)
+                node.getChildren().add(buildViewNode(child, childrenByParentId));
+            } else if ("TableColumn".equals(childTypeCode)) {
+                node.getTableColumns().add(buildTableColumn(child, childrenByParentId));
+            }
+        }
+        return node;
+    }
+
+    private TableColumn buildTableColumn(AppConfigObjectEntity entity,
+                                          Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        TableColumn column = new TableColumn();
+        column.setId(entity.getId());
+        column.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("TableColumnKey".equals(childTypeCode)) {
+                column.setKey(child.getCode());
+                column.setKeyNodeId(child.getId());
+            } else if ("TableColumnHeader".equals(childTypeCode)) {
+                column.setHeader(child.getCode());
+                column.setHeaderNodeId(child.getId());
+            } else if ("TableColumnRendererRef".equals(childTypeCode)) {
+                column.setEntityRendererRef(child.getCode());
+                column.setEntityRendererRefNodeId(child.getId());
+            }
+        }
+        return column;
     }
 
     private List<AppConfigObjectEntity> childrenOf(Long parentId,
