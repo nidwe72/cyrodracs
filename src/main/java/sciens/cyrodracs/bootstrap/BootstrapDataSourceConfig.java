@@ -17,6 +17,9 @@ public class BootstrapDataSourceConfig {
     @Value("${app.bootstrap.path:./appConfigBootstrap.db}")
     private String bootstrapPath;
 
+    @Value("${app.default-db.url:jdbc:sqlite:./appConfig.db}")
+    private String defaultDbUrl;
+
     @Bean
     @Primary
     public DataSource dataSource() {
@@ -83,7 +86,7 @@ public class BootstrapDataSourceConfig {
 
             stmt.execute(
                     "INSERT INTO APP_CONFIG_DATABASE (code, jdbc_url, db_username, db_password, active) " +
-                    "VALUES ('default', 'jdbc:sqlite:./appConfig.db', '', '', 1)");
+                    "VALUES ('default', '" + defaultDbUrl + "', '', '', 1)");
 
         } catch (SQLException e) {
             throw new IllegalStateException(

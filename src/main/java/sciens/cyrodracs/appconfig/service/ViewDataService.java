@@ -35,8 +35,15 @@ public class ViewDataService {
         this.filterExecutor = filterExecutor;
     }
 
+    private static final int DEFAULT_PAGE_SIZE = 10;
+
     @Transactional(readOnly = true)
     public List<Map<String, Object>> getData(String viewNodeCode) {
+        return getDataPaged(viewNodeCode, 0, DEFAULT_PAGE_SIZE).items();
+    }
+
+    @Transactional(readOnly = true)
+    public PagedResult getDataPaged(String viewNodeCode, int page, int pageSize) {
         ViewNode node = resolveViewNode(viewNodeCode);
         if (node.getType() != ViewNodeType.ENTITY_LIST) {
             throw new IllegalArgumentException("ViewNode '" + viewNodeCode + "' is not ENTITY_LIST");
@@ -52,7 +59,8 @@ public class ViewDataService {
         }
 
         Class<?> entityClass = resolveClass(provider.getEntityType().getFqcn());
-        List<?> entities = filterExecutor.executeQuery(provider, entityClass);
+        int offset = page * pageSize;
+        FilterExecutor.PagedResult paged = filterExecutor.executePagedQuery(provider, entityClass, offset, pageSize);
 
         // Pre-compile renderers for columns that have them
         Map<String, Template> columnRenderers = new LinkedHashMap<>();
@@ -66,7 +74,7 @@ public class ViewDataService {
         }
 
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (Object entity : entities) {
+        for (Object entity : paged.items()) {
             Map<String, Object> row = new LinkedHashMap<>();
             // Always include id for edit/delete actions
             row.put("id", getId(entity));
@@ -91,7 +99,19 @@ public class ViewDataService {
             }
             rows.add(row);
         }
-        return rows;
+        return new PagedResult(rows, paged.totalCount(), page, pageSize);
+    }
+
+    /** Holds a page of mapped rows together with pagination metadata. */
+    public record PagedResult(
+            List<Map<String, Object>> items,
+            long totalCount,
+            int page,
+            int pageSize
+    ) {
+        public int totalPages() {
+            return (int) Math.ceil((double) totalCount / pageSize);
+        }
     }
 
     @Transactional

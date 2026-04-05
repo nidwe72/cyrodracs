@@ -4,9 +4,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import sciens.cyrodracs.appconfig.service.ViewDataService;
 
-import java.util.List;
-import java.util.Map;
-
 @RestController
 @RequestMapping("/api/view")
 @CrossOrigin(origins = "*")
@@ -19,10 +16,18 @@ public class ViewDataController {
     }
 
     @GetMapping("/{viewNodeCode}/data")
-    public ResponseEntity<List<Map<String, Object>>> getData(@PathVariable String viewNodeCode) {
+    public ResponseEntity<PagedResponse> getData(
+            @PathVariable String viewNodeCode,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
         try {
-            List<Map<String, Object>> data = viewDataService.getData(viewNodeCode);
-            return ResponseEntity.ok(data);
+            var result = viewDataService.getDataPaged(viewNodeCode, page, size);
+            return ResponseEntity.ok(new PagedResponse(
+                    result.items(),
+                    result.totalCount(),
+                    result.page(),
+                    result.pageSize(),
+                    result.totalPages()));
         } catch (IllegalArgumentException | IllegalStateException e) {
             return ResponseEntity.badRequest().build();
         }

@@ -14,6 +14,8 @@ import java.time.LocalDateTime;
 import java.time.YearMonth;
 import java.util.List;
 
+import jakarta.persistence.TypedQuery;
+
 /**
  * Shared utility that executes EntityProvider queries with filter and sort
  * using JPA Criteria API.
@@ -27,24 +29,50 @@ public class FilterExecutor {
         this.entityManager = entityManager;
     }
 
+    /** Holds a page of results together with the total count across all pages. */
+    public record PagedResult(List<?> items, long totalCount) {}
+
     /**
      * Queries all entities matching the provider's filter and sort configuration.
      */
     public List<?> executeQuery(EntityProvider provider, Class<?> entityClass) {
-        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
-        CriteriaQuery<Object> query = cb.createQuery(Object.class);
-        Root<?> root = query.from(entityClass);
-        query.select(root);
+        return executePagedQuery(provider, entityClass, 0, Integer.MAX_VALUE).items();
+    }
 
-        // Apply filter
+    /**
+     * Queries a page of entities matching the provider's filter and sort configuration.
+     *
+     * @param offset zero-based first-result index
+     * @param limit  maximum number of results to return
+     */
+    public PagedResult executePagedQuery(EntityProvider provider, Class<?> entityClass,
+                                         int offset, int limit) {
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+
+        // --- count query ---
+        CriteriaQuery<Long> countQuery = cb.createQuery(Long.class);
+        Root<?> countRoot = countQuery.from(entityClass);
+        countQuery.select(cb.count(countRoot));
+        if (provider.getFilter() != null) {
+            Predicate countPredicate = buildPredicate(provider.getFilter(), countRoot, cb);
+            if (countPredicate != null) {
+                countQuery.where(countPredicate);
+            }
+        }
+        long totalCount = entityManager.createQuery(countQuery).getSingleResult();
+
+        // --- data query ---
+        CriteriaQuery<Object> dataQuery = cb.createQuery(Object.class);
+        Root<?> root = dataQuery.from(entityClass);
+        dataQuery.select(root);
+
         if (provider.getFilter() != null) {
             Predicate predicate = buildPredicate(provider.getFilter(), root, cb);
             if (predicate != null) {
-                query.where(predicate);
+                dataQuery.where(predicate);
             }
         }
 
-        // Apply sort
         if (!provider.getSortFields().isEmpty()) {
             List<Order> orders = provider.getSortFields().stream()
                     .map(sf -> {
@@ -53,10 +81,14 @@ public class FilterExecutor {
                                 ? cb.desc(path) : cb.asc(path);
                     })
                     .toList();
-            query.orderBy(orders);
+            dataQuery.orderBy(orders);
         }
 
-        return entityManager.createQuery(query).getResultList();
+        TypedQuery<Object> typedQuery = entityManager.createQuery(dataQuery);
+        typedQuery.setFirstResult(offset);
+        typedQuery.setMaxResults(limit);
+
+        return new PagedResult(typedQuery.getResultList(), totalCount);
     }
 
     private Predicate buildPredicate(FilterNode node, Root<?> root, CriteriaBuilder cb) {
