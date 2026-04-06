@@ -26,9 +26,9 @@ class AppConfigTypeSeederTest {
     @InjectMocks AppConfigTypeSeeder seeder;
 
     @Test
-    void seedsFourTypesAndRootObjectWhenTablesAreEmpty() {
+    void seedsTypesAndRootObjectWhenTablesAreEmpty() {
         AtomicLong idSeq = new AtomicLong(1);
-        when(typeRepo.count()).thenReturn(0L);
+        when(typeRepo.findByCode(any())).thenReturn(Optional.empty());
         when(typeRepo.save(any())).thenAnswer(inv -> {
             AppConfigTypeEntity e = inv.getArgument(0);
             ReflectionTestUtils.setField(e, "id", idSeq.getAndIncrement());
@@ -43,31 +43,21 @@ class AppConfigTypeSeederTest {
 
         seeder.seedIfNeeded();
 
-        verify(typeRepo, times(4)).save(any(AppConfigTypeEntity.class));
+        // Verify at least the core types were saved (many more than 4 now)
+        verify(typeRepo, atLeast(10)).save(any(AppConfigTypeEntity.class));
         verify(objectRepo).save(any(AppConfigObjectEntity.class));
-    }
-
-    @Test
-    void skipsAllSeedingWhenBothTablesAlreadyPopulated() {
-        when(typeRepo.count()).thenReturn(4L);
-        when(objectRepo.count()).thenReturn(1L);
-
-        seeder.seedIfNeeded();
-
-        verify(typeRepo, never()).save(any());
-        verify(objectRepo, never()).save(any());
     }
 
     @Test
     void skipsRootObjectSeedingWhenObjectsAlreadyExist() {
         AtomicLong idSeq = new AtomicLong(1);
-        when(typeRepo.count()).thenReturn(0L);
+        when(typeRepo.findByCode(any())).thenReturn(Optional.empty());
         when(typeRepo.save(any())).thenAnswer(inv -> {
             AppConfigTypeEntity e = inv.getArgument(0);
             ReflectionTestUtils.setField(e, "id", idSeq.getAndIncrement());
             return e;
         });
-        when(objectRepo.count()).thenReturn(3L);  // objects already exist
+        when(objectRepo.count()).thenReturn(3L);
 
         seeder.seedIfNeeded();
 
@@ -77,7 +67,7 @@ class AppConfigTypeSeederTest {
     @Test
     void savedTypesHaveCorrectCodes() {
         AtomicLong idSeq = new AtomicLong(1);
-        when(typeRepo.count()).thenReturn(0L);
+        when(typeRepo.findByCode(any())).thenReturn(Optional.empty());
         when(typeRepo.save(any())).thenAnswer(inv -> {
             AppConfigTypeEntity e = inv.getArgument(0);
             ReflectionTestUtils.setField(e, "id", idSeq.getAndIncrement());
@@ -91,5 +81,7 @@ class AppConfigTypeSeederTest {
         verify(typeRepo).save(argThat(t -> "DataForm".equals(t.getCode()) && t.isCollection()));
         verify(typeRepo).save(argThat(t -> "DataFormElement".equals(t.getCode()) && t.isCollection()));
         verify(typeRepo).save(argThat(t -> "DataFormElementType".equals(t.getCode()) && t.isEnumType()));
+        verify(typeRepo).save(argThat(t -> "Expression".equals(t.getCode()) && t.isCollection()));
+        verify(typeRepo).save(argThat(t -> "FilterInjectable".equals(t.getCode()) || "FilterInjectableRef".equals(t.getCode())));
     }
 }

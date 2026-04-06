@@ -19,5 +19,6 @@ public enum DataFormElementType {
     SLIDER,
     RATING,
     DATE_PICKER__YEAR_MONTH,
-    ENTITY_SELECT
+    ENTITY_SELECT,
+    GRID
 }

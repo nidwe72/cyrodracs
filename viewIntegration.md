@@ -148,17 +148,34 @@ The tree builder recursively builds ViewNodes. For GROUP nodes, it recurses into
 ### V2.1 Endpoint
 
 ```
-GET /api/view/{viewNodeCode}/data
+GET /api/view/{viewNodeCode}/data?page=0&size=10
 ```
 
-Returns rows as flat maps with all columns resolved. The `id` field is **always included** in every row (regardless of whether it is defined as a TableColumn), because the frontend needs it for edit/delete actions:
+Returns a paginated response wrapping rows as flat maps with all columns resolved. The `id` field is **always included** in every row (regardless of whether it is defined as a TableColumn), because the frontend needs it for edit/delete actions.
+
+**Query parameters:**
+
+| param | default | description |
+|---|---|---|
+| `page` | `0` | Zero-based page index |
+| `size` | `10` | Number of items per page |
+
+**Response (`PagedResponse`):**
 
 ```json
-[
-  { "id": 1, "name": "Nikon F3", "producer": "Nikon (1917-Now)", "releaseYear": "1980-03" },
-  { "id": 2, "name": "Canon AE-1", "producer": "Canon (1937-Now)", "releaseYear": "1976-04" }
-]
+{
+  "items": [
+    { "id": 1, "name": "Nikon F3", "producer": "Nikon (1917-Now)", "releaseYear": "1980-03" },
+    { "id": 2, "name": "Canon AE-1", "producer": "Canon (1937-Now)", "releaseYear": "1976-04" }
+  ],
+  "totalCount": 482,
+  "page": 0,
+  "pageSize": 10,
+  "totalPages": 49
+}
 ```
+
+**Implementation:** `FilterExecutor.executePagedQuery()` runs a JPA Criteria count query for `totalCount`, then the data query with `TypedQuery.setFirstResult(page * size)` and `TypedQuery.setMaxResults(size)`.
 
 ### V2.2 Resolution Logic
 
@@ -207,7 +224,7 @@ When a ViewNode is activated (double-clicked):
 
 | ViewNode type | Detail panel shows |
 |---|---|
-| `ENTITY_LIST` | Table of entities (fetched from `GET /api/view/{code}/data`), with add/edit/delete. Columns from `tableColumns`. Edit form from `dataFormRef`. |
+| `ENTITY_LIST` | Paginated table of entities (fetched from `GET /api/view/{code}/data?page=N&size=10`), with add/edit/delete. Columns from `tableColumns`. Edit form from `dataFormRef`. Pagination bar (first/prev/next/last) shown when `totalPages > 1`. Header shows total count. |
 | `GROUP` | Either nothing (just expand the group), or a summary of child nodes. |
 | `STATIC_PAGE` | Content resolved from the `content` field (initially a simple text display, extensible later). |
 

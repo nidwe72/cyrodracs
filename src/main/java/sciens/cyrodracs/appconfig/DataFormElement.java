@@ -1,24 +1,27 @@
 package sciens.cyrodracs.appconfig;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class DataFormElement implements Coded {
 
     private Long id;
     private String code;
     private DataFormElementType type;
-    /** DB id of the DataFormElementType child object; null when no type has been set yet. */
     private Long typeNodeId;
-    /** The entity attribute path this element binds to (e.g. "name", "producer.name"). */
     private String dataBinding;
-    /** DB id of the DataBinding child object in the config tree. */
     private Long dataBindingNodeId;
-    /** Code of the EntityProvider referenced by this ENTITY_SELECT element. */
     private String entityProviderRef;
-    /** DB id of the EntityProviderRef child object. */
     private Long entityProviderRefNodeId;
-    /** Code of the EntityRenderer referenced by this ENTITY_SELECT element. */
     private String entityRendererRef;
-    /** DB id of the EntityRendererRef child object. */
     private Long entityRendererRefNodeId;
+    /** GRID: column definitions for the embedded table. */
+    private List<TableColumn> tableColumns = new ArrayList<>();
+    /** When true, changing this element triggers reload of dependent elements (e.g., GRIDs). */
+    private boolean reloadOnChange;
+    private Long reloadOnChangeNodeId;
+    /** Optional: controls whether this element is visible. Null = always visible. */
+    private VisibilityRule visibilityRule;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -51,4 +54,16 @@ public class DataFormElement implements Coded {
 
     public Long getEntityRendererRefNodeId() { return entityRendererRefNodeId; }
     public void setEntityRendererRefNodeId(Long entityRendererRefNodeId) { this.entityRendererRefNodeId = entityRendererRefNodeId; }
+
+    public List<TableColumn> getTableColumns() { return tableColumns; }
+    public void setTableColumns(List<TableColumn> tableColumns) { this.tableColumns = tableColumns; }
+
+    public boolean isReloadOnChange() { return reloadOnChange; }
+    public void setReloadOnChange(boolean reloadOnChange) { this.reloadOnChange = reloadOnChange; }
+
+    public Long getReloadOnChangeNodeId() { return reloadOnChangeNodeId; }
+    public void setReloadOnChangeNodeId(Long reloadOnChangeNodeId) { this.reloadOnChangeNodeId = reloadOnChangeNodeId; }
+
+    public VisibilityRule getVisibilityRule() { return visibilityRule; }
+    public void setVisibilityRule(VisibilityRule visibilityRule) { this.visibilityRule = visibilityRule; }
 }

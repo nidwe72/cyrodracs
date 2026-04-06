@@ -220,9 +220,29 @@ redeployment.
 
 ### File location
 
-`appConfigBootstrap.db` is a SQLite database file placed in a well-known
-location on the server's filesystem (configurable via an environment variable
-`APP_CONFIG_BOOTSTRAP_PATH`, defaulting to `./appConfigBootstrap.db`).
+Database files are stored **outside the repository** to avoid accidental
+commits of binary data. The default location for local development is:
+
+```
+cyrodracs_db/
+├── appConfigBootstrap.db     # bootstrap (JDBC connection config)
+├── appConfig.db              # main application data
+├── backup.sh                 # timestamped backup script
+├── backups/                  # backup snapshots
+└── test/                     # isolated test databases
+    ├── appConfigBootstrap.db
+    └── appConfig.db
+```
+
+Paths are configured via `application.properties`:
+
+| Property | Default | Description |
+|---|---|---|
+| `app.bootstrap.path` | `./appConfigBootstrap.db` | Path to the bootstrap SQLite file |
+| `app.default-db.url` | `jdbc:sqlite:./appConfig.db` | JDBC URL written into a newly created bootstrap file |
+
+Tests override both properties to point to `cyrodracs_db/test/`, ensuring
+they never read or write the production database.
 
 ### Table: `APP_CONFIG_DATABASE`
 
@@ -251,22 +271,9 @@ restarting.
 
 ### Getting-started mode (default)
 
-For local development the application ships with a SQLite-based default:
-
-| File | Role |
-|---|---|
-| `appConfigBootstrap.db` | Bootstrap SQLite file — created automatically on first start if absent |
-| `appConfig.db` | Main SQLite file — holds `APP_CONFIG_TYPE` and `APP_CONFIG_OBJECT` |
-
-On first start, if `appConfigBootstrap.db` does not exist the application
-creates it and inserts a default row:
-
-```
-jdbc_url    = jdbc:sqlite:./appConfig.db
-db_username = (empty)
-db_password = (empty)
-active      = 1
-```
+For local development the application ships with a SQLite-based default.
+On first start, if the bootstrap file does not exist the application creates
+it and inserts a default row using the `app.default-db.url` property value.
 
 This means zero configuration is required to get started locally.
 To switch to PostgreSQL later, update the `jdbc_url`, `db_username`, and
@@ -274,10 +281,10 @@ To switch to PostgreSQL later, update the `jdbc_url`, `db_username`, and
 
 ### Startup sequence
 
-1. Application starts and locates `appConfigBootstrap.db` via
-   `app.bootstrap.path` (default `./appConfigBootstrap.db`).
-2. If the file does not exist, it is created with the default SQLite entry
-   pointing to `./appConfig.db`.
+1. Application starts and locates the bootstrap file via
+   `app.bootstrap.path`.
+2. If the file does not exist, it is created with a default SQLite entry
+   using the `app.default-db.url` property value.
 3. Reads the single `APP_CONFIG_DATABASE` row where `active = 1`.
 4. Constructs the JPA / JDBC datasource from the retrieved URL and credentials.
    - For SQLite URLs the connection pool is capped at 1 (SQLite is single-writer).

@@ -11,6 +11,7 @@ public class AppConfig implements Coded {
     private Map<String, EntityProvider> entityProviders = new LinkedHashMap<>();
     private Map<String, EntityRenderer> entityRenderers = new LinkedHashMap<>();
     private Map<String, ViewNode> viewTree = new LinkedHashMap<>();
+    private Map<String, Expression> expressions = new LinkedHashMap<>();
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -31,4 +32,7 @@ public class AppConfig implements Coded {
 
     public Map<String, ViewNode> getViewTree() { return viewTree; }
     public void setViewTree(Map<String, ViewNode> viewTree) { this.viewTree = viewTree; }
+
+    public Map<String, Expression> getExpressions() { return expressions; }
+    public void setExpressions(Map<String, Expression> expressions) { this.expressions = expressions; }
 }

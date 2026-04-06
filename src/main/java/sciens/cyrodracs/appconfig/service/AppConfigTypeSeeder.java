@@ -140,6 +140,60 @@ public class AppConfigTypeSeeder {
 
         ensureType("TableColumnRendererRef", tableColumnType, "entityRendererRef", false, false,
                 "java.lang.String");
+
+        // GRID TableColumns on DataFormElement (reuses TableColumn model)
+        AppConfigTypeEntity gridTableColumnType = ensureType("GridTableColumn", dataFormElementType, "tableColumns", true, false,
+                "sciens.cyrodracs.appconfig.TableColumn");
+
+        ensureType("GridTableColumnKey", gridTableColumnType, "key", false, false,
+                "java.lang.String");
+
+        ensureType("GridTableColumnHeader", gridTableColumnType, "header", false, false,
+                "java.lang.String");
+
+        ensureType("GridTableColumnRendererRef", gridTableColumnType, "entityRendererRef", false, false,
+                "java.lang.String");
+
+        // ReloadOnChange on DataFormElement
+        ensureType("ReloadOnChange", dataFormElementType, "reloadOnChange", false, false,
+                "java.lang.Boolean");
+
+        // VisibilityRule on DataFormElement
+        AppConfigTypeEntity visibilityRuleType = ensureType("VisibilityRule", dataFormElementType, "visibilityRule", false, false,
+                "sciens.cyrodracs.appconfig.VisibilityRule");
+
+        ensureType("VisibilityExpressionRef", visibilityRuleType, "expressionRef", false, false,
+                "java.lang.String");
+
+        ensureType("VisibilityOperator", visibilityRuleType, "operator", false, true,
+                "sciens.cyrodracs.appconfig.VisibilityOperator");
+
+        ensureType("VisibilityCompareValue", visibilityRuleType, "compareValue", false, false,
+                "java.lang.String");
+
+        // FilterNode.expressionRef
+        ensureType("FilterExpressionRef", filterNodeType, "expressionRef", false, false,
+                "java.lang.String");
+
+        // EntityProvider.filterInjectableRef
+        ensureType("FilterInjectableRef", entityProviderType, "filterInjectableRef", false, false,
+                "java.lang.String");
+
+        // Expression types
+        AppConfigTypeEntity expressionType = ensureType("Expression", appConfigType, "expressions", true, false,
+                "sciens.cyrodracs.appconfig.Expression");
+
+        ensureType("ExpressionType", expressionType, "type", false, true,
+                "sciens.cyrodracs.appconfig.ExpressionType");
+
+        ensureType("ExpressionBody", expressionType, "expression", false, false,
+                "java.lang.String");
+
+        ensureType("InjectableBaseClass", expressionType, "baseClass", false, true,
+                "sciens.cyrodracs.appconfig.InjectableBaseClass");
+
+        ensureType("ExpressionDescription", expressionType, "description", false, false,
+                "java.lang.String");
     }
 
     private AppConfigTypeEntity ensureType(String code, AppConfigTypeEntity parent,

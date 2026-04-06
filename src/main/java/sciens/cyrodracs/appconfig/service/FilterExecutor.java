@@ -8,6 +8,8 @@ import sciens.cyrodracs.appconfig.FilterNode;
 import sciens.cyrodracs.appconfig.FilterNodeType;
 import sciens.cyrodracs.appconfig.SortField;
 import sciens.cyrodracs.appconfig.SortDirection;
+import sciens.cyrodracs.expression.ExpressionContext;
+import sciens.cyrodracs.expression.ExpressionResolver;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -24,9 +26,16 @@ import jakarta.persistence.TypedQuery;
 public class FilterExecutor {
 
     private final EntityManager entityManager;
+    private ExpressionResolver expressionResolver;
 
     public FilterExecutor(EntityManager entityManager) {
         this.entityManager = entityManager;
+    }
+
+    /** Setter injection to avoid circular dependency (ExpressionResolver → AppConfigStore → FilterExecutor). */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setExpressionResolver(ExpressionResolver expressionResolver) {
+        this.expressionResolver = expressionResolver;
     }
 
     /** Holds a page of results together with the total count across all pages. */
@@ -89,6 +98,80 @@ public class FilterExecutor {
         typedQuery.setMaxResults(limit);
 
         return new PagedResult(typedQuery.getResultList(), totalCount);
+    }
+
+    /**
+     * Execute with dynamic expression context. Merges static filter + injectable filter.
+     */
+    public PagedResult executePagedQuery(EntityProvider provider, Class<?> entityClass,
+                                         int offset, int limit,
+                                         ExpressionContext context) {
+        FilterNode staticFilter = resolveFilterExpressions(provider.getFilter(), context);
+
+        FilterNode injectableFilter = null;
+        if (provider.getFilterInjectableRef() != null && expressionResolver != null) {
+            injectableFilter = expressionResolver.resolveFilter(
+                provider.getFilterInjectableRef(), context);
+        }
+
+        FilterNode effectiveFilter = mergeFilters(staticFilter, injectableFilter);
+
+        // Create a temporary provider with the resolved effective filter
+        EntityProvider resolvedProvider = new EntityProvider();
+        resolvedProvider.setEntityType(provider.getEntityType());
+        resolvedProvider.setFilter(effectiveFilter);
+        resolvedProvider.setSortFields(provider.getSortFields());
+
+        return executePagedQuery(resolvedProvider, entityClass, offset, limit);
+    }
+
+    private FilterNode mergeFilters(FilterNode staticFilter, FilterNode injectableFilter) {
+        if (staticFilter == null && injectableFilter == null) return null;
+        if (staticFilter == null) return injectableFilter;
+        if (injectableFilter == null) return staticFilter;
+
+        FilterNode merged = new FilterNode();
+        merged.setType(FilterNodeType.AND_GROUP);
+        merged.setChildren(List.of(staticFilter, injectableFilter));
+        return merged;
+    }
+
+    private FilterNode resolveFilterExpressions(FilterNode node, ExpressionContext context) {
+        if (node == null || expressionResolver == null) return node;
+        if (node.getExpressionRef() != null) {
+            String resolved = expressionResolver.resolve(node.getExpressionRef(), context);
+            FilterNode copy = copyFilterNode(node);
+            copy.setValue(resolved);
+            copy.setExpressionRef(null);
+            return copy;
+        }
+        if (node.getChildren() != null && !node.getChildren().isEmpty()) {
+            FilterNode copy = copyFilterNode(node);
+            copy.setChildren(node.getChildren().stream()
+                .map(child -> resolveFilterExpressions(child, context))
+                .toList());
+            return copy;
+        }
+        return node;
+    }
+
+    private FilterNode copyFilterNode(FilterNode source) {
+        FilterNode copy = new FilterNode();
+        copy.setId(source.getId());
+        copy.setCode(source.getCode());
+        copy.setType(source.getType());
+        copy.setTypeNodeId(source.getTypeNodeId());
+        copy.setField(source.getField());
+        copy.setFieldNodeId(source.getFieldNodeId());
+        copy.setOperator(source.getOperator());
+        copy.setOperatorNodeId(source.getOperatorNodeId());
+        copy.setValue(source.getValue());
+        copy.setValueNodeId(source.getValueNodeId());
+        copy.setValues(source.getValues());
+        copy.setExpressionRef(source.getExpressionRef());
+        copy.setExpressionRefNodeId(source.getExpressionRefNodeId());
+        copy.setChildren(source.getChildren());
+        return copy;
     }
 
     private Predicate buildPredicate(FilterNode node, Root<?> root, CriteriaBuilder cb) {

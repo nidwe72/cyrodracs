@@ -16,6 +16,8 @@ public class FilterNode implements Coded {
     private String value;
     private Long valueNodeId;
     private List<String> values = new ArrayList<>();
+    private String expressionRef;
+    private Long expressionRefNodeId;
     private List<FilterNode> children = new ArrayList<>();
 
     public Long getId() { return id; }
@@ -52,6 +54,12 @@ public class FilterNode implements Coded {
 
     public List<String> getValues() { return values; }
     public void setValues(List<String> values) { this.values = values; }
+
+    public String getExpressionRef() { return expressionRef; }
+    public void setExpressionRef(String expressionRef) { this.expressionRef = expressionRef; }
+
+    public Long getExpressionRefNodeId() { return expressionRefNodeId; }
+    public void setExpressionRefNodeId(Long expressionRefNodeId) { this.expressionRefNodeId = expressionRefNodeId; }
 
     public List<FilterNode> getChildren() { return children; }
     public void setChildren(List<FilterNode> children) { this.children = children; }

@@ -17,6 +17,11 @@ import sciens.cyrodracs.appconfig.SortField;
 import sciens.cyrodracs.appconfig.TableColumn;
 import sciens.cyrodracs.appconfig.ViewNode;
 import sciens.cyrodracs.appconfig.ViewNodeType;
+import sciens.cyrodracs.appconfig.Expression;
+import sciens.cyrodracs.appconfig.ExpressionType;
+import sciens.cyrodracs.appconfig.InjectableBaseClass;
+import sciens.cyrodracs.appconfig.VisibilityRule;
+import sciens.cyrodracs.appconfig.VisibilityOperator;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectEntity;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectRepository;
 
@@ -63,6 +68,7 @@ public class AppConfigTreeBuilder {
         Map<String, EntityProvider> entityProviders = new LinkedHashMap<>();
         Map<String, EntityRenderer> entityRenderers = new LinkedHashMap<>();
         Map<String, ViewNode> viewTree = new LinkedHashMap<>();
+        Map<String, Expression> expressions = new LinkedHashMap<>();
 
         for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
             String typeCode = child.getType().getCode();
@@ -78,12 +84,16 @@ public class AppConfigTreeBuilder {
             } else if ("ViewNode".equals(typeCode)) {
                 ViewNode viewNode = buildViewNode(child, childrenByParentId);
                 viewTree.put(viewNode.getCode(), viewNode);
+            } else if ("Expression".equals(typeCode)) {
+                Expression expr = buildExpression(child, childrenByParentId);
+                expressions.put(expr.getCode(), expr);
             }
         }
         config.setDataForms(dataForms);
         config.setEntityProviders(entityProviders);
         config.setEntityRenderers(entityRenderers);
         config.setViewTree(viewTree);
+        config.setExpressions(expressions);
         return config;
     }
 
@@ -127,6 +137,13 @@ public class AppConfigTreeBuilder {
             } else if ("EntityRendererRef".equals(childTypeCode)) {
                 element.setEntityRendererRef(child.getCode());
                 element.setEntityRendererRefNodeId(child.getId());
+            } else if ("GridTableColumn".equals(childTypeCode)) {
+                element.getTableColumns().add(buildGridTableColumn(child, childrenByParentId));
+            } else if ("ReloadOnChange".equals(childTypeCode)) {
+                element.setReloadOnChange("true".equalsIgnoreCase(child.getCode()));
+                element.setReloadOnChangeNodeId(child.getId());
+            } else if ("VisibilityRule".equals(childTypeCode)) {
+                element.setVisibilityRule(buildVisibilityRule(child, childrenByParentId));
             }
         }
         return element;
@@ -145,6 +162,9 @@ public class AppConfigTreeBuilder {
                 provider.setEntityTypeNodeId(child.getId());
             } else if ("FilterNode".equals(childTypeCode)) {
                 provider.setFilter(buildFilterNode(child, childrenByParentId));
+            } else if ("FilterInjectableRef".equals(childTypeCode)) {
+                provider.setFilterInjectableRef(child.getCode());
+                provider.setFilterInjectableRefNodeId(child.getId());
             } else if ("SortField".equals(childTypeCode)) {
                 provider.getSortFields().add(buildSortField(child, childrenByParentId));
             }
@@ -174,6 +194,9 @@ public class AppConfigTreeBuilder {
                 node.setValueNodeId(child.getId());
             } else if ("FilterValueItem".equals(childTypeCode)) {
                 node.getValues().add(child.getCode());
+            } else if ("FilterExpressionRef".equals(childTypeCode)) {
+                node.setExpressionRef(child.getCode());
+                node.setExpressionRefNodeId(child.getId());
             } else if ("FilterNode".equals(childTypeCode)) {
                 // Recursive: child FilterNodes for AND_GROUP / OR_GROUP
                 node.getChildren().add(buildFilterNode(child, childrenByParentId));
@@ -268,6 +291,75 @@ public class AppConfigTreeBuilder {
                 column.setHeader(child.getCode());
                 column.setHeaderNodeId(child.getId());
             } else if ("TableColumnRendererRef".equals(childTypeCode)) {
+                column.setEntityRendererRef(child.getCode());
+                column.setEntityRendererRefNodeId(child.getId());
+            }
+        }
+        return column;
+    }
+
+    private Expression buildExpression(AppConfigObjectEntity entity,
+                                       Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        Expression expr = new Expression();
+        expr.setId(entity.getId());
+        expr.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("ExpressionType".equals(childTypeCode) && child.getEnumValue() != null) {
+                expr.setType(ExpressionType.valueOf(child.getEnumValue()));
+                expr.setTypeNodeId(child.getId());
+            } else if ("ExpressionBody".equals(childTypeCode)) {
+                expr.setExpression(child.getCode());
+                expr.setExpressionNodeId(child.getId());
+            } else if ("InjectableBaseClass".equals(childTypeCode) && child.getEnumValue() != null) {
+                expr.setBaseClass(InjectableBaseClass.valueOf(child.getEnumValue()));
+                expr.setBaseClassNodeId(child.getId());
+            } else if ("ExpressionDescription".equals(childTypeCode)) {
+                expr.setDescription(child.getCode());
+                expr.setDescriptionNodeId(child.getId());
+            }
+        }
+        return expr;
+    }
+
+    private VisibilityRule buildVisibilityRule(AppConfigObjectEntity entity,
+                                               Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        VisibilityRule rule = new VisibilityRule();
+        rule.setId(entity.getId());
+        rule.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("VisibilityExpressionRef".equals(childTypeCode)) {
+                rule.setExpressionRef(child.getCode());
+                rule.setExpressionRefNodeId(child.getId());
+            } else if ("VisibilityOperator".equals(childTypeCode) && child.getEnumValue() != null) {
+                rule.setOperator(VisibilityOperator.valueOf(child.getEnumValue()));
+                rule.setOperatorNodeId(child.getId());
+            } else if ("VisibilityCompareValue".equals(childTypeCode)) {
+                rule.setCompareValue(child.getCode());
+                rule.setCompareValueNodeId(child.getId());
+            }
+        }
+        return rule;
+    }
+
+    private TableColumn buildGridTableColumn(AppConfigObjectEntity entity,
+                                              Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        TableColumn column = new TableColumn();
+        column.setId(entity.getId());
+        column.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("GridTableColumnKey".equals(childTypeCode)) {
+                column.setKey(child.getCode());
+                column.setKeyNodeId(child.getId());
+            } else if ("GridTableColumnHeader".equals(childTypeCode)) {
+                column.setHeader(child.getCode());
+                column.setHeaderNodeId(child.getId());
+            } else if ("GridTableColumnRendererRef".equals(childTypeCode)) {
                 column.setEntityRendererRef(child.getCode());
                 column.setEntityRendererRefNodeId(child.getId());
             }

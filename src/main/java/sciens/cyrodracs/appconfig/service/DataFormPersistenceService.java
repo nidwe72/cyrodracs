@@ -8,6 +8,7 @@ import sciens.cyrodracs.appconfig.AppConfigStore;
 import sciens.cyrodracs.appconfig.DataForm;
 import sciens.cyrodracs.appconfig.DataFormData;
 import sciens.cyrodracs.appconfig.DataFormElement;
+import sciens.cyrodracs.appconfig.DataFormElementType;
 
 import java.lang.reflect.Method;
 import java.time.YearMonth;
@@ -67,7 +68,10 @@ public class DataFormPersistenceService {
         data.setDataFormCode(dataFormCode);
         data.setEntityId(entityId);
 
-        for (String fieldCode : form.getElements().keySet()) {
+        for (var entry : form.getElements().entrySet()) {
+            // Skip GRID elements — they don't bind to entity fields
+            if (entry.getValue().getType() == DataFormElementType.GRID) continue;
+            String fieldCode = entry.getKey();
             String bindingPath = resolveBindingPath(form, fieldCode);
             Object value = getProperty(entity, bindingPath);
             data.getValues().put(fieldCode, value);
@@ -100,6 +104,9 @@ public class DataFormPersistenceService {
 
     private void applyValues(Object entity, DataForm form, Map<String, Object> values) {
         for (Map.Entry<String, Object> entry : values.entrySet()) {
+            // Skip GRID elements — they don't bind to entity fields
+            DataFormElement element = form.getElements().get(entry.getKey());
+            if (element != null && element.getType() == DataFormElementType.GRID) continue;
             String bindingPath = resolveBindingPath(form, entry.getKey());
             setProperty(entity, bindingPath, entry.getValue());
         }
