@@ -2223,9 +2223,9 @@ for the DB-persisted injectable source code.
 | Frontend: Imports section (read-only) in dialog | Done |
 | Frontend: "Edit Source" button + scrollable preview on detail panel | Done |
 | Frontend: Conditional rendering (INJECTABLE types only) | Done |
+| Frontend: Debounced compile-check while typing (500ms) | Done |
 | Frontend: Inline error underlines (`spanBuilder`) | Pending (Phase 2) |
 | Frontend: Server-backed entity method proposals (E8.4.4) | Pending (Phase 2) |
-| Frontend: Debounced compile-check while typing | Pending (Phase 2) |
 
 ### E8.1 Editor Choice: `re_editor`
 
@@ -2611,7 +2611,7 @@ The compile-check is triggered:
 - **On demand:** via the "Check" button in the editor dialog footer.
 - **On save:** before persisting — if compilation fails, the save is blocked and errors
   are displayed.
-- **Debounced (Phase 2):** 500ms after the user stops typing, providing near-real-time feedback.
+- **Debounced:** 500ms after the user stops typing, providing near-real-time feedback.
 
 #### E8.6.3 Error Display
 
@@ -2643,7 +2643,7 @@ matching what the editor displays (see E8.3.3).
 | Inline error underlines (`spanBuilder`) | No | Yes |
 | Server-backed entity method proposals (E8.4.4) | No | Yes |
 | @ManyToOne navigation proposals (walk JPA metamodel) | No | Yes |
-| Debounced compile-check while typing | No | Yes |
+| Debounced compile-check while typing (500ms) | Yes | Yes |
 | Parameter hints | No | Future |
 | Go-to-definition (base class methods) | No | Future |
 | Inline documentation (Javadoc hover) | No | Future |

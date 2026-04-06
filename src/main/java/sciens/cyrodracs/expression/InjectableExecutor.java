@@ -54,42 +54,13 @@ public class InjectableExecutor {
 
     private Class<?> compileClassBody(String code, InjectableBaseClass baseClass, String classBody) {
         String className = "Injectable_" + sanitize(code);
-        String source = """
-            package sciens.cyrodracs.expression.generated;
-
-            import sciens.cyrodracs.expression.*;
-            import sciens.cyrodracs.appconfig.*;
-            import sciens.cyrodracs.camera.*;
-            import java.util.*;
-            import java.time.*;
-
-            public class %s extends %s {
-                %s
-            }
-            """.formatted(className, baseClass.getFqcn(), classBody);
-
+        String source = InjectableSourceBuilder.buildClassSource(className, baseClass, classBody);
         return compileSource(className, source);
     }
 
     private Class<?> compileSnippetBody(String code, InjectableBaseClass baseClass, String methodBody) {
         String className = "Snippet_" + sanitize(code);
-        String source = """
-            package sciens.cyrodracs.expression.generated;
-
-            import sciens.cyrodracs.expression.*;
-            import sciens.cyrodracs.appconfig.*;
-            import sciens.cyrodracs.camera.*;
-            import java.util.*;
-            import java.time.*;
-
-            public class %s extends %s {
-                @Override
-                public void execute() {
-                    %s
-                }
-            }
-            """.formatted(className, baseClass.getFqcn(), methodBody);
-
+        String source = InjectableSourceBuilder.buildSnippetSource(className, baseClass, methodBody);
         return compileSource(className, source);
     }
 

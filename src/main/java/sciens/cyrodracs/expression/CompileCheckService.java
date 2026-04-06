@@ -15,22 +15,6 @@ import java.util.regex.Pattern;
 @Service
 public class CompileCheckService {
 
-    private static final String PACKAGE_AND_IMPORTS = """
-            package sciens.cyrodracs.expression.generated;
-
-            import sciens.cyrodracs.expression.*;
-            import sciens.cyrodracs.appconfig.*;
-            import sciens.cyrodracs.camera.*;
-            import java.util.*;
-            import java.time.*;
-            """;
-
-    /** Lines in the scaffold before user code for INJECTABLE_CLASS. */
-    public static final int CLASS_SCAFFOLD_LINES = 9;
-
-    /** Lines in the scaffold before user code for INJECTABLE_SNIPPET. */
-    public static final int SNIPPET_SCAFFOLD_LINES = 11;
-
     public record CompileError(int line, String message) {}
     public record CompileWarning(String message) {}
 
@@ -52,8 +36,8 @@ public class CompileCheckService {
                                      String expression, String expectedEntityType) {
         boolean isClassBody = (type == ExpressionType.INJECTABLE_CLASS);
         String source = isClassBody
-                ? buildClassSource(baseClass, expression)
-                : buildSnippetSource(baseClass, expression);
+                ? InjectableSourceBuilder.buildClassSource("$CompileCheck", baseClass, expression)
+                : InjectableSourceBuilder.buildSnippetSource("$CompileCheck", baseClass, expression);
 
         List<CompileError> errors = compileOnly(source, isClassBody);
         if (!errors.isEmpty()) {
@@ -76,7 +60,9 @@ public class CompileCheckService {
         } catch (CompileException e) {
             Location loc = e.getLocation();
             int line = loc != null ? loc.getLineNumber() : -1;
-            int scaffoldLines = isClassBody ? CLASS_SCAFFOLD_LINES : SNIPPET_SCAFFOLD_LINES;
+            int scaffoldLines = isClassBody
+                    ? InjectableSourceBuilder.CLASS_SCAFFOLD_LINES
+                    : InjectableSourceBuilder.SNIPPET_SCAFFOLD_LINES;
             int userLine = line > 0 ? line - scaffoldLines : -1;
             String message = e.getMessage();
             // Strip the location prefix that Janino adds (e.g., "Line 12, Column 5: ...")
@@ -92,12 +78,10 @@ public class CompileCheckService {
 
     private void checkEntityTypeMismatch(String source, String expectedEntityType,
                                           List<CompileWarning> warnings) {
-        // Scan for getEditorEntity(Xxx.class) or casts like (CameraProducer)
         Pattern pattern = Pattern.compile("getEditorEntity\\s*\\(\\s*(\\w+)\\.class\\s*\\)");
         Matcher matcher = pattern.matcher(source);
         while (matcher.find()) {
             String usedClass = matcher.group(1);
-            // expectedEntityType is like "CAMERA_PRODUCER" — derive simple class name
             String expectedSimple = toPascalCase(expectedEntityType);
             if (!usedClass.equals(expectedSimple)) {
                 warnings.add(new CompileWarning(
@@ -106,23 +90,6 @@ public class CompileCheckService {
                         + "Expected getEditorEntity(" + expectedSimple + ".class)."));
             }
         }
-    }
-
-    private String buildClassSource(InjectableBaseClass baseClass, String classBody) {
-        return PACKAGE_AND_IMPORTS
-                + "public class $CompileCheck extends " + baseClass.getFqcn() + " {\n"
-                + "    " + classBody + "\n"
-                + "}\n";
-    }
-
-    private String buildSnippetSource(InjectableBaseClass baseClass, String methodBody) {
-        return PACKAGE_AND_IMPORTS
-                + "public class $CompileCheck extends " + baseClass.getFqcn() + " {\n"
-                + "    @Override\n"
-                + "    public void execute() {\n"
-                + "        " + methodBody + "\n"
-                + "    }\n"
-                + "}\n";
     }
 
     private static String toPascalCase(String screamingSnake) {
