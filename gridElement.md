@@ -29,8 +29,8 @@ proprietary mounts (X-Mount, created by Fuji) and adopted foreign mounts (M42, c
 | Test data (Fuji, ZeissIkon, mounts, mappings) | Done |
 | Frontend: AppConfig editor — Expression fields (type, baseClass, body, desc) | Done |
 | Frontend: AppConfig editor — filterInjectableRef on EntityProvider | Done |
-| **Shared `ColumnRenderer` utility (dot-path getProperty, Mustache rendering)** | **Pending (G3)** |
-| **Parameterized `buildTableColumn` in tree builder (DRY)** | **Pending (G4)** |
+| Shared `ColumnRenderer` utility (dot-path getProperty, Mustache rendering) | Done (G3) |
+| Parameterized `buildTableColumn` in tree builder (DRY) | Done (G4) |
 | Frontend: GRID table rendering in DataForm editor | Done (G1.6) |
 | Frontend: GRID pagination | Done (G1.6) |
 | Frontend: GRID add/edit/delete actions | Future |

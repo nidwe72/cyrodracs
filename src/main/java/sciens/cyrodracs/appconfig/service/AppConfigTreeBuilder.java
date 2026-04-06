@@ -138,7 +138,8 @@ public class AppConfigTreeBuilder {
                 element.setEntityRendererRef(child.getCode());
                 element.setEntityRendererRefNodeId(child.getId());
             } else if ("GridTableColumn".equals(childTypeCode)) {
-                element.getTableColumns().add(buildGridTableColumn(child, childrenByParentId));
+                element.getTableColumns().add(buildTableColumn(child, childrenByParentId,
+                        "GridTableColumnKey", "GridTableColumnHeader", "GridTableColumnRendererRef"));
             } else if ("ReloadOnChange".equals(childTypeCode)) {
                 element.setReloadOnChange("true".equalsIgnoreCase(child.getCode()));
                 element.setReloadOnChangeNodeId(child.getId());
@@ -270,27 +271,30 @@ public class AppConfigTreeBuilder {
                 // Recursive: child ViewNodes (GROUP children)
                 node.getChildren().add(buildViewNode(child, childrenByParentId));
             } else if ("TableColumn".equals(childTypeCode)) {
-                node.getTableColumns().add(buildTableColumn(child, childrenByParentId));
+                node.getTableColumns().add(buildTableColumn(child, childrenByParentId,
+                        "TableColumnKey", "TableColumnHeader", "TableColumnRendererRef"));
             }
         }
         return node;
     }
 
     private TableColumn buildTableColumn(AppConfigObjectEntity entity,
-                                          Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+                                          Map<Long, List<AppConfigObjectEntity>> childrenByParentId,
+                                          String keyTypeCode, String headerTypeCode,
+                                          String rendererRefTypeCode) {
         TableColumn column = new TableColumn();
         column.setId(entity.getId());
         column.setCode(entity.getCode());
 
         for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
             String childTypeCode = child.getType().getCode();
-            if ("TableColumnKey".equals(childTypeCode)) {
+            if (keyTypeCode.equals(childTypeCode)) {
                 column.setKey(child.getCode());
                 column.setKeyNodeId(child.getId());
-            } else if ("TableColumnHeader".equals(childTypeCode)) {
+            } else if (headerTypeCode.equals(childTypeCode)) {
                 column.setHeader(child.getCode());
                 column.setHeaderNodeId(child.getId());
-            } else if ("TableColumnRendererRef".equals(childTypeCode)) {
+            } else if (rendererRefTypeCode.equals(childTypeCode)) {
                 column.setEntityRendererRef(child.getCode());
                 column.setEntityRendererRefNodeId(child.getId());
             }
@@ -345,27 +349,6 @@ public class AppConfigTreeBuilder {
         return rule;
     }
 
-    private TableColumn buildGridTableColumn(AppConfigObjectEntity entity,
-                                              Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
-        TableColumn column = new TableColumn();
-        column.setId(entity.getId());
-        column.setCode(entity.getCode());
-
-        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
-            String childTypeCode = child.getType().getCode();
-            if ("GridTableColumnKey".equals(childTypeCode)) {
-                column.setKey(child.getCode());
-                column.setKeyNodeId(child.getId());
-            } else if ("GridTableColumnHeader".equals(childTypeCode)) {
-                column.setHeader(child.getCode());
-                column.setHeaderNodeId(child.getId());
-            } else if ("GridTableColumnRendererRef".equals(childTypeCode)) {
-                column.setEntityRendererRef(child.getCode());
-                column.setEntityRendererRefNodeId(child.getId());
-            }
-        }
-        return column;
-    }
 
     private List<AppConfigObjectEntity> childrenOf(Long parentId,
                                                     Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {

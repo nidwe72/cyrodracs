@@ -2217,13 +2217,13 @@ for the DB-persisted injectable source code.
 | Frontend: Client-side autocomplete (injectable API, FilterOperator) | Done |
 | Frontend: Autocomplete popup UI | Done |
 | Frontend: Compile-check on demand ("Check" button) | Done |
+| Frontend: Compile-check on save (block save on errors) | Done |
 | Frontend: Error/warning panel in dialog | Done |
+| Frontend: Gutter error icons (`_ErrorGutter` via `indicatorBuilder`) | Done |
 | Frontend: Imports section (read-only) in dialog | Done |
 | Frontend: "Edit Source" button + scrollable preview on detail panel | Done |
 | Frontend: Conditional rendering (INJECTABLE types only) | Done |
-| Frontend: Gutter error/warning icons (`indicatorBuilder`) | Pending (Phase 2) |
 | Frontend: Inline error underlines (`spanBuilder`) | Pending (Phase 2) |
-| Frontend: Compile-check on save (block save on errors) | Pending |
 | Frontend: Server-backed entity method proposals (E8.4.4) | Pending (Phase 2) |
 | Frontend: Debounced compile-check while typing | Pending (Phase 2) |
 

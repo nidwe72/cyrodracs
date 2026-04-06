@@ -3,8 +3,6 @@ package sciens.cyrodracs.appconfig.service;
 import com.samskivert.mustache.Mustache;
 import com.samskivert.mustache.Template;
 import jakarta.persistence.EntityManager;
-import jakarta.persistence.metamodel.EntityType;
-import jakarta.persistence.metamodel.SingularAttribute;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import sciens.cyrodracs.appconfig.AppConfig;
@@ -15,7 +13,6 @@ import sciens.cyrodracs.appconfig.TableColumn;
 import sciens.cyrodracs.appconfig.ViewNode;
 import sciens.cyrodracs.appconfig.ViewNodeType;
 
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -27,12 +24,14 @@ public class ViewDataService {
     private final AppConfigStore appConfigStore;
     private final EntityManager entityManager;
     private final FilterExecutor filterExecutor;
+    private final ColumnRenderer columnRenderer;
 
     public ViewDataService(AppConfigStore appConfigStore, EntityManager entityManager,
-                           FilterExecutor filterExecutor) {
+                           FilterExecutor filterExecutor, ColumnRenderer columnRenderer) {
         this.appConfigStore = appConfigStore;
         this.entityManager = entityManager;
         this.filterExecutor = filterExecutor;
+        this.columnRenderer = columnRenderer;
     }
 
     private static final int DEFAULT_PAGE_SIZE = 10;
@@ -76,26 +75,10 @@ public class ViewDataService {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Object entity : paged.items()) {
             Map<String, Object> row = new LinkedHashMap<>();
-            // Always include id for edit/delete actions
-            row.put("id", getId(entity));
+            row.put("id", columnRenderer.getId(entity));
             for (TableColumn col : node.getTableColumns()) {
-                String key = col.getKey();
-                Object value = getProperty(entity, key);
-
-                if (value != null && isJpaEntity(value.getClass())) {
-                    // Relationship column
-                    Template template = columnRenderers.get(key);
-                    if (template != null) {
-                        // Render via Mustache template
-                        Map<String, Object> context = buildEntityContext(value);
-                        row.put(key, template.execute(context));
-                    } else {
-                        // Fallback: extract ID
-                        row.put(key, getId(value));
-                    }
-                } else {
-                    row.put(key, value);
-                }
+                row.put(col.getKey(), columnRenderer.resolveAndRender(
+                        entity, col.getKey(), columnRenderers.get(col.getKey())));
             }
             rows.add(row);
         }
@@ -161,68 +144,6 @@ public class ViewDataService {
             }
         }
         return null;
-    }
-
-    private Map<String, Object> buildEntityContext(Object entity) {
-        Map<String, Object> context = new LinkedHashMap<>();
-        EntityType<?> metamodel = entityManager.getMetamodel().entity(resolveEntityClass(entity));
-        for (SingularAttribute<?, ?> attr : metamodel.getSingularAttributes()) {
-            if ("id".equals(attr.getName())) continue;
-            if (attr.getPersistentAttributeType() != jakarta.persistence.metamodel.Attribute.PersistentAttributeType.BASIC) continue;
-            Object value = getProperty(entity, attr.getName());
-            if (value != null) {
-                context.put(attr.getName(), value.toString());
-            }
-        }
-        return context;
-    }
-
-    private Object getProperty(Object entity, String fieldName) {
-        String getterName = "get" + Character.toUpperCase(fieldName.charAt(0)) + fieldName.substring(1);
-        for (Method method : entity.getClass().getMethods()) {
-            if (method.getName().equals(getterName) && method.getParameterCount() == 0) {
-                try {
-                    return method.invoke(entity);
-                } catch (ReflectiveOperationException e) {
-                    return null;
-                }
-            }
-        }
-        return null;
-    }
-
-    private Long getId(Object entity) {
-        try {
-            Method getter = entity.getClass().getMethod("getId");
-            return (Long) getter.invoke(entity);
-        } catch (ReflectiveOperationException e) {
-            return null;
-        }
-    }
-
-    private boolean isJpaEntity(Class<?> clazz) {
-        Class<?> current = clazz;
-        while (current != null && current != Object.class) {
-            if (current.isAnnotationPresent(jakarta.persistence.Entity.class)) {
-                return true;
-            }
-            current = current.getSuperclass();
-        }
-        return false;
-    }
-
-    /**
-     * Resolves the actual @Entity-annotated class from a potentially proxied instance.
-     */
-    private Class<?> resolveEntityClass(Object entity) {
-        Class<?> current = entity.getClass();
-        while (current != null && current != Object.class) {
-            if (current.isAnnotationPresent(jakarta.persistence.Entity.class)) {
-                return current;
-            }
-            current = current.getSuperclass();
-        }
-        return entity.getClass();
     }
 
     private Class<?> resolveClass(String fqcn) {
