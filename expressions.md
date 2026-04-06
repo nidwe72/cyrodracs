@@ -2224,8 +2224,10 @@ for the DB-persisted injectable source code.
 | Frontend: "Edit Source" button + scrollable preview on detail panel | Done |
 | Frontend: Conditional rendering (INJECTABLE types only) | Done |
 | Frontend: Debounced compile-check while typing (500ms) | Done |
+| Frontend: Server-backed type resolution + method proposals (E8.4.4) | Done |
+| Frontend: Custom prompts builder with variable chain resolution | Done |
+| Backend: `ExpressionTypeResolver` (JavaParser AST + reflection) | Done |
 | Frontend: Inline error underlines (`spanBuilder`) | Pending (Phase 2) |
-| Frontend: Server-backed entity method proposals (E8.4.4) | Pending (Phase 2) |
 
 ### E8.1 Editor Choice: `re_editor`
 
@@ -2641,8 +2643,9 @@ matching what the editor displays (see E8.3.3).
 | Gutter error/warning icons (`indicatorBuilder`) | Yes | Yes |
 | Client-side keyword/API autocomplete (E8.4.3) | Yes | Yes |
 | Inline error underlines (`spanBuilder`) | No | Yes |
-| Server-backed entity method proposals (E8.4.4) | No | Yes |
-| @ManyToOne navigation proposals (walk JPA metamodel) | No | Yes |
+| Server-backed type resolution + method proposals (E8.4.4) | Yes | Yes |
+| Variable chain resolution (p.getProducer().getName()) | Yes | Yes |
+| @ManyToOne navigation proposals (transitive via reflection) | Yes | Yes |
 | Debounced compile-check while typing (500ms) | Yes | Yes |
 | Parameter hints | No | Future |
 | Go-to-definition (base class methods) | No | Future |
