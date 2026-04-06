@@ -2198,31 +2198,308 @@ void injectable_canNavigateManyToOne() {
 
 ---
 
-## Task E8 — Injectable Code Editor (Future)
+## Task E8 — Injectable Code Editor
 
-**Goal:** Replace the plain textarea in E7.14 with a proper code editor that provides syntax
-highlighting, bracket matching, error markers, and eventually IDE-like autocomplete for the
-DB-persisted injectable source code.
+**Goal:** Replace the plain textarea in E7.14 with a proper code editor that provides Java
+syntax highlighting, line numbers, code folding, error markers, and server-backed autocomplete
+for the DB-persisted injectable source code.
 
-### E8.1 Editor Choice
+### E8 Implementation Status
 
-| Editor | Size | Fit |
+| Component | Status |
+|---|---|
+| `re_editor` + `re_highlight` dependencies | Done |
+| Backend: `CompileCheckService` (compile-only via Janino, line mapping) | Done |
+| Backend: `POST /api/expressions/compile-check` endpoint | Done |
+| Frontend: `ExpressionEditorDialog` modal with `CodeEditor` | Done |
+| Frontend: Java syntax highlighting (`langJava` + `atomOneLightTheme`) | Done |
+| Frontend: Line numbers + code folding | Done |
+| Frontend: Client-side autocomplete (injectable API, FilterOperator) | Done |
+| Frontend: Autocomplete popup UI | Done |
+| Frontend: Compile-check on demand ("Check" button) | Done |
+| Frontend: Error/warning panel in dialog | Done |
+| Frontend: Imports section (read-only) in dialog | Done |
+| Frontend: "Edit Source" button + scrollable preview on detail panel | Done |
+| Frontend: Conditional rendering (INJECTABLE types only) | Done |
+| Frontend: Gutter error/warning icons (`indicatorBuilder`) | Pending (Phase 2) |
+| Frontend: Inline error underlines (`spanBuilder`) | Pending (Phase 2) |
+| Frontend: Compile-check on save (block save on errors) | Pending |
+| Frontend: Server-backed entity method proposals (E8.4.4) | Pending (Phase 2) |
+| Frontend: Debounced compile-check while typing | Pending (Phase 2) |
+
+### E8.1 Editor Choice: `re_editor`
+
+**Decision:** Use `re_editor` (pub.dev, by Reqable, MIT license).
+
+| Criterion | `re_editor` | Alternatives considered |
 |---|---|---|
-| **Monaco Editor** | ~2MB | Best fit — the VS Code engine. Full Java syntax support, built-in bracket matching, multi-cursor, minimap. Custom `CompletionItemProvider` for server-backed autocomplete. |
-| **CodeMirror 6** | ~150KB | Lighter alternative. `@codemirror/lang-java` for syntax highlighting. Extensible completion system. Good enough for snippets. |
-| **Ace Editor** | ~300KB | Mature, built-in Java mode. Custom completers. Middle ground. |
+| **Platform** | All (Web, Android, iOS, Desktop) — pure Flutter widget | Monaco: web-only (`HtmlElementView`). Rules out Android. |
+| **Java highlighting** | Yes, via `re_highlight` (Dart port of highlight.js 11.9, `langJava`) | `flutter_code_editor`: also yes, via `highlight.dart` |
+| **Autocomplete** | Built-in `CodeAutocomplete` wrapper with `CodePrompt` model | `flutter_code_editor`: none (DIY). Monaco: native but web-only. |
+| **Code folding** | Yes, `DefaultCodeChunkAnalyzer` (brace-based) | `flutter_code_editor`: yes |
+| **Line numbers** | Yes, via `indicatorBuilder` + `DefaultCodeLineNumber` | `flutter_code_editor`: yes (built-in) |
+| **Error markers** | No built-in API. Workaround via `spanBuilder` (custom `TextSpan` per line) and `indicatorBuilder` (gutter icons). | Monaco: native `setModelMarkers`. |
+| **Bundle size** | Pure Dart, no platform assets | Monaco: ~2-3MB JS/CSS assets |
 
-**Recommended:** Monaco for INJECTABLE_CLASS (full class bodies benefit from rich editing),
-with CodeMirror as a lighter fallback for INJECTABLE_SNIPPET if bundle size is a concern.
+**Why `re_editor` over Monaco:** The app may run on Android. Monaco requires `HtmlElementView`
+(web-only). `re_editor` is a pure Flutter widget — same code runs everywhere. The missing
+built-in error marker API is solvable via `spanBuilder` and `indicatorBuilder`.
 
-### E8.2 Flutter Integration
+**Why `re_editor` over `flutter_code_editor`:** `re_editor` has a built-in autocomplete
+framework (`CodeAutocomplete`, `CodePrompt` types) that can be wired to the backend proposals
+endpoint. `flutter_code_editor` has no autocomplete support at all.
 
-Since the frontend is Flutter web, the editor is embedded via:
-- `HtmlElementView` wrapping a Monaco/CodeMirror instance in an iframe or div.
-- Communication via `dart:js_interop` / `postMessage` for value sync and events.
-- Alternatively, a Flutter package like `flutter_code_editor` (wraps CodeMirror).
+### E8.2 Dependencies
 
-### E8.3 Autocomplete: Backend Proposals Endpoint
+```yaml
+# pubspec.yaml
+dependencies:
+  re_editor: ^0.8.0
+  re_highlight: ^0.0.3   # transitive, but explicit for langJava import
+```
+
+### E8.3 Widget Integration
+
+The current `_expressionBodyField()` in `app_config_detail_panel.dart` is a plain
+`TextFormField` with `maxLines: 12` and monospace font. It is replaced with a `CodeEditor`
+widget wrapped in `CodeAutocomplete`.
+
+#### E8.3.1 Basic Editor Setup
+
+```dart
+final _codeController = CodeLineEditingController.fromText(sourceCode);
+
+CodeEditor(
+  controller: _codeController,
+  style: CodeEditorStyle(
+    fontSize: 13,
+    fontFamily: 'monospace',
+    codeTheme: CodeHighlightTheme(
+      languages: {'java': CodeHighlightThemeMode(mode: langJava)},
+      theme: atomOneLightTheme,
+    ),
+  ),
+  indicatorBuilder: (context, editingController, chunkController, notifier) {
+    return Row(children: [
+      DefaultCodeLineNumber(
+        controller: editingController,
+        notifier: notifier,
+      ),
+      DefaultCodeChunkIndicator(
+        width: 20,
+        controller: chunkController,
+        notifier: notifier,
+      ),
+    ]);
+  },
+  chunkAnalyzer: DefaultCodeChunkAnalyzer(),  // brace-based folding
+)
+```
+
+#### E8.3.2 Modal Dialog
+
+The code editor opens in a modal dialog, triggered by an "Edit Source" button on the Expression
+detail panel. The detail panel retains the expression type dropdown, baseClass dropdown, and
+description field. Only the code editor goes into the dialog.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  producerMountFilter : FilterInjectable                 [X] │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  CodeEditor (editable, user's code only)                    │
+│  ─ Java highlighting, line numbers, code folding            │
+│  ─ Autocomplete for injectable API                          │
+│                                                             │
+├─────────────────────────────────────────────────────────────┤
+│  Error panel (compile errors/warnings, if any)              │
+├─────────────────────────────────────────────────────────────┤
+│  Imports (read-only, scrollable):                           │
+│  import sciens.cyrodracs.expression.*;                      │
+│  import sciens.cyrodracs.appconfig.*;                       │
+│  import sciens.cyrodracs.camera.*;                          │
+│  import java.util.*;                                        │
+│  import java.time.*;                                        │
+├─────────────────────────────────────────────────────────────┤
+│  [Check]                                   [Cancel] [Save]  │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Dialog structure:**
+- **Title bar:** `expressionCode : baseClassName` (e.g., `producerMountFilter : FilterInjectable`).
+  Shows the expression name and what base class is being extended — the user sees at a glance
+  what they are coding for. Close button on the right.
+- **Code editor:** fills the main dialog body. Contains only the user's editable code (the
+  method body for SNIPPET, or full method(s) for CLASS). No scaffold mixed in.
+- **Error panel:** shown between editor and imports when compile errors exist. Lists line
+  number + severity icon + message.
+- **Imports section:** read-only scrollable text area at the bottom showing the import
+  statements that the compiler adds. Informational — lets the user know which classes are
+  available without needing to memorize packages.
+- **Footer:** "Check" button (compile-check), "Cancel", and "Save".
+- **Dialog size:** ~80% of viewport width, ~80% of viewport height.
+- **Styling:** `BorderRadius.zero`, `AppTheme.panelBorder`, `AppTheme.panelHeaderBackground`
+  on title bar (consistent with panel pattern from `frontendStyling.md`).
+
+#### E8.3.3 Imports Section
+
+The imports displayed at the bottom match exactly what `InjectableExecutor` adds at compile
+time:
+
+```java
+import sciens.cyrodracs.expression.*;
+import sciens.cyrodracs.appconfig.*;
+import sciens.cyrodracs.camera.*;
+import java.util.*;
+import java.time.*;
+```
+
+These are the same for all `baseClass` values. The import list includes all domain entity
+packages so the user can reference any entity class (e.g., `CameraProducer`, `FilterOperator`)
+without needing to know the exact import.
+
+The imports section is rendered as a read-only `Text` widget with monospace font, inside a
+`Container` with `AppTheme.panelBorder` top border and light background. It is always visible
+(not collapsed) since the list is short (5 lines).
+
+#### E8.3.4 INJECTABLE_SNIPPET vs INJECTABLE_CLASS
+
+The editor content differs by expression type:
+
+| Type | What the editor shows | What DB stores |
+|---|---|---|
+| `INJECTABLE_CLASS` | Full method(s) including `@Override`, signatures, braces | Same as editor content |
+| `INJECTABLE_SNIPPET` | Method body only (statements inside `execute()`) | Same as editor content |
+
+For `INJECTABLE_CLASS`, a typical editor content:
+```java
+@Override
+public void execute() {
+    CameraProducer p = (CameraProducer) getInjectionContext().getEditorEntity();
+    if (p == null) { setResult(null); return; }
+    setResult(
+        comparison("cameraProducer.id", FilterOperator.EQUALS, p.getId())
+    );
+}
+```
+
+For `INJECTABLE_SNIPPET`, a typical editor content:
+```java
+CameraProducer p = (CameraProducer) getInjectionContext().getEditorEntity();
+if (p == null) { setResult(null); return; }
+setResult(comparison("cameraProducer.id", FilterOperator.EQUALS, p.getId()));
+```
+
+The wrapping (package declaration, imports, class declaration, and for SNIPPET the
+`@Override public void execute() { ... }`) is added by `InjectableExecutor` at compile time
+and by the compile-check endpoint when validating. The editor never shows the wrapping.
+
+#### E8.3.5 Compile-Check Line Number Mapping
+
+The compile-check endpoint compiles the full wrapped source (scaffold + user code). Error
+line numbers reference the full source. The frontend subtracts the scaffold line count to
+map errors to editor line numbers:
+
+- **INJECTABLE_CLASS scaffold:** package (1) + blank (1) + imports (5) + blank (1) +
+  class declaration (1) = **9 lines** before user code.
+- **INJECTABLE_SNIPPET scaffold:** same 9 lines + `@Override` (1) + `public void execute() {` (1)
+  = **11 lines** before user code.
+
+```dart
+final editorLine = compileErrorLine - scaffoldLineCount;
+```
+
+#### E8.3.6 Content Sync and Save Flow
+
+The modal dialog receives the current expression body text from the detail panel's controller.
+On "Save":
+1. The dialog updates the in-memory text (`_expressionBodyCtrl.text = editorContent`).
+2. The dialog closes.
+3. The user clicks the detail panel's existing Save button to persist.
+
+This keeps the save flow consistent with other fields (type, baseClass, description). "Cancel"
+discards any edits and closes without updating the controller.
+
+### E8.4 Autocomplete
+
+`re_editor` provides autocomplete via the `CodeAutocomplete` wrapper widget and
+`CodeAutocompletePromptsBuilder` interface.
+
+#### E8.4.1 Widget Structure
+
+```dart
+CodeAutocomplete(
+  viewBuilder: (context, notifier, onSelected) {
+    // Build the dropdown popup UI showing suggestions
+    // notifier.value contains the current CodeAutocompleteEditingValue
+    // onSelected(CodeAutocompleteResult) inserts the selected completion
+  },
+  promptsBuilder: _InjectablePromptsBuilder(
+    baseClass: expression.baseClass,
+    entityType: resolvedEntityType,
+  ),
+  child: CodeEditor( ... ),
+)
+```
+
+#### E8.4.2 Prompt Types
+
+`re_editor` provides typed prompt classes extending `CodePrompt`:
+
+| Class | Use | Fields |
+|---|---|---|
+| `CodeKeywordPrompt` | Java keywords | `word` |
+| `CodeFieldPrompt` | Entity getters, context accessors | `word`, `type` |
+| `CodeFunctionPrompt` | Methods with params | `word`, `type`, `parameters`, `optionalParameters` |
+
+#### E8.4.3 Client-Side Prompts (Phase 1)
+
+Static prompts derived from the expression's `baseClass` and known API:
+
+```dart
+// Always available (from InjectionContext):
+CodeFunctionPrompt(word: 'getInjectionContext', type: 'InjectionContext', parameters: {}),
+
+// From FilterInjectable base class (when baseClass == FILTER):
+CodeFunctionPrompt(word: 'comparison', type: 'FilterNode',
+    parameters: {'field': 'String', 'operator': 'FilterOperator', 'value': 'Object'}),
+CodeFunctionPrompt(word: 'and', type: 'FilterNode',
+    parameters: {'children': 'FilterNode...'}),
+CodeFunctionPrompt(word: 'or', type: 'FilterNode',
+    parameters: {'children': 'FilterNode...'}),
+CodeFunctionPrompt(word: 'in', type: 'FilterNode',
+    parameters: {'field': 'String', 'values': 'List<Object>'}),
+CodeFunctionPrompt(word: 'setResult', type: 'void',
+    parameters: {'result': 'FilterNode'}),
+
+// FilterOperator enum constants:
+CodeFieldPrompt(word: 'EQUALS', type: 'FilterOperator'),
+CodeFieldPrompt(word: 'NOT_EQUALS', type: 'FilterOperator'),
+// ... etc.
+```
+
+**Related prompts** (triggered after `.`): configured via the `relatedPrompts` map on
+`DefaultCodeAutocompletePromptsBuilder`, keyed by the preceding identifier:
+
+```dart
+relatedPrompts: {
+  'getInjectionContext()': [
+    CodeFunctionPrompt(word: 'getEditorEntity', type: 'Object', parameters: {'clazz': 'Class<T>'}),
+    CodeFunctionPrompt(word: 'getFormState', type: 'Map<String,String>', parameters: {}),
+    CodeFunctionPrompt(word: 'getFormValue', type: 'String', parameters: {'key': 'String'}),
+  ],
+  'FilterOperator': [
+    CodeFieldPrompt(word: 'EQUALS', type: 'FilterOperator'),
+    CodeFieldPrompt(word: 'NOT_EQUALS', type: 'FilterOperator'),
+    CodeFieldPrompt(word: 'GREATER_THAN', type: 'FilterOperator'),
+    // ... all enum constants
+  ],
+}
+```
+
+#### E8.4.4 Server-Backed Prompts (Phase 2)
+
+For entity method proposals (after `getEditorEntity(X.class).`), the frontend calls:
 
 ```
 POST /api/expressions/completions
@@ -2245,7 +2522,11 @@ Response:
 }
 ```
 
-### E8.4 Autocomplete Context Sources
+A custom `CodeAutocompletePromptsBuilder` calls this endpoint asynchronously when it detects
+a dot after a `getEditorEntity(...)` call, converting the response into `CodeFunctionPrompt`
+instances.
+
+#### E8.4.5 Autocomplete Context Sources
 
 The backend derives proposals from multiple sources depending on cursor position:
 
@@ -2256,38 +2537,129 @@ The backend derives proposals from multiple sources depending on cursor position
 | `entity.getProducer().` | JPA metamodel for `CameraProducer` (via @ManyToOne type resolution) | Getters on the related entity |
 | `comparison(` | `FilterInjectable` method signature | Parameter hints: `field, operator, value` |
 | `FilterOperator.` | Enum constants | `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `IN`, ... |
-| `setResult(` | Base class method | Parameter hint based on `baseClass` (Object for scalar, boolean for boolean, FilterNode for filter) |
+| `setResult(` | Base class method | Parameter hint based on `baseClass` |
 | (top level in class body) | Base class + common patterns | `@Override public void execute()`, snippet templates |
+
+#### E8.4.6 Autocomplete Popup UI
+
+The `viewBuilder` callback is responsible for rendering the dropdown. It receives a
+`ValueNotifier<CodeAutocompleteEditingValue?>` and an `onSelected` callback. The popup
+should follow the app's styling (`AppTheme`, sharp corners, `panelBorder`). A `ListView`
+of items showing `word` and `type` in a compact row, keyboard-navigable.
 
 ### E8.5 Error Markers
 
-The compile-check endpoint (E7.14) returns line numbers and error messages. The editor maps
-these to **inline error markers** (red squiggly underlines with hover tooltips), same as any IDE.
+The compile-check endpoint (E7.14) returns line numbers and error messages. `re_editor` has
+no built-in marker API, so error display uses two mechanisms:
 
+#### E8.5.1 Gutter Icons via `indicatorBuilder`
+
+The `indicatorBuilder` already renders line numbers. When compilation errors are present,
+it additionally renders a red circle icon (or warning triangle for warnings) in the gutter
+next to the affected line number. Tapping the icon shows the error message in a tooltip.
+
+```dart
+indicatorBuilder: (context, editingController, chunkController, notifier) {
+  return Row(children: [
+    _ErrorGutterIndicator(
+      errors: _compilationErrors,   // List<CompilationError>
+      notifier: notifier,
+    ),
+    DefaultCodeLineNumber(
+      controller: editingController,
+      notifier: notifier,
+    ),
+    DefaultCodeChunkIndicator(
+      width: 20,
+      controller: chunkController,
+      notifier: notifier,
+    ),
+  ]);
+},
 ```
-Monaco: editor.setModelMarkers(model, "injectable", [
-    { startLineNumber: 3, startColumn: 12, endLineNumber: 3, endColumn: 22,
-      message: "cannot find symbol: method setResul(...)",
-      severity: monaco.MarkerSeverity.Error }
-]);
-```
 
-The entity type cross-check warnings (E7.14) are shown as **yellow warning markers**.
+#### E8.5.2 Inline Underlines via `spanBuilder`
 
-### E8.6 Editor Features Summary
+The `CodeLineEditingController.spanBuilder` callback intercepts the `TextSpan` for each line.
+When a line has a compilation error, the span is split at the error position and the affected
+range gets a wavy red underline (`TextDecoration.underline`, `TextDecorationStyle.wavy`,
+`color: Colors.red`). Entity type cross-check warnings use yellow.
+
+#### E8.5.3 Error Panel Below Editor
+
+Additionally, compilation errors and warnings are listed in a compact panel below the editor
+(similar to VS Code's "Problems" panel), showing line number, severity icon, and message text.
+This ensures errors are visible even when the affected line is scrolled out of view.
+
+### E8.6 Compile-Check Integration (Phase 1)
+
+The compile-check endpoint (E7.14) is implemented as part of Phase 1. It is the backend
+counterpart to the "Check" button in the editor dialog.
+
+#### E8.6.1 Backend: Compile-Check Endpoint
+
+A new `POST /api/expressions/compile-check` endpoint (specified in E7.14). Implementation:
+1. Extract the compilation step from `InjectableExecutor` into a reusable method
+   `compileOnly(type, baseClass, source)` that compiles via Janino without executing.
+2. Catch `CompileException` and map it to structured error responses with line numbers.
+3. Optionally scan for `getEditorEntity(*.class)` calls and compare against `usageContext`
+   entity type for cross-check warnings.
+
+#### E8.6.2 Frontend: Trigger Points
+
+The compile-check is triggered:
+- **On demand:** via the "Check" button in the editor dialog footer.
+- **On save:** before persisting — if compilation fails, the save is blocked and errors
+  are displayed.
+- **Debounced (Phase 2):** 500ms after the user stops typing, providing near-real-time feedback.
+
+#### E8.6.3 Error Display
+
+Compile errors from the endpoint are displayed in:
+1. **Error panel** below the editor (always visible in Phase 1) — list of line number +
+   message, styled with `AppTheme`.
+2. **Gutter icons** via `indicatorBuilder` — red circle on error lines, yellow triangle
+   on warning lines.
+3. **Inline underlines** via `spanBuilder` (Phase 2) — wavy red underline on error ranges.
+
+The line numbers in the error response correspond to the full source (including scaffold),
+matching what the editor displays (see E8.3.3).
+
+### E8.7 Editor Features Summary
 
 | Feature | Phase 1 (MVP) | Phase 2 (IDE-like) |
 |---|---|---|
-| Syntax highlighting | Yes (Java mode) | Yes |
-| Bracket matching | Yes (built-in) | Yes |
-| Line numbers | Yes (built-in) | Yes |
-| Error markers from compile-check | Yes | Yes |
-| Basic autocomplete (keywords, snippets) | Yes (client-side) | Yes |
-| Server-backed entity method proposals | No | Yes (E8.3/E8.4) |
-| @ManyToOne navigation proposals | No | Yes (walk JPA metamodel) |
-| Parameter hints | No | Yes |
+| Modal dialog with "Edit Source" button | Yes | Yes |
+| Read-only import/class scaffold (E8.3.3) | Yes | Yes |
+| Java syntax highlighting (`langJava` via `re_highlight`) | Yes | Yes |
+| Line numbers (`DefaultCodeLineNumber`) | Yes | Yes |
+| Code folding (`DefaultCodeChunkAnalyzer`, brace-based) | Yes | Yes |
+| Undo/redo (built-in) | Yes | Yes |
+| Compile-check endpoint (E8.6.1, backend) | Yes | Yes |
+| Compile-check on demand + on save (E8.6.2) | Yes | Yes |
+| Error panel below editor (E8.6.3) | Yes | Yes |
+| Gutter error/warning icons (`indicatorBuilder`) | Yes | Yes |
+| Client-side keyword/API autocomplete (E8.4.3) | Yes | Yes |
+| Inline error underlines (`spanBuilder`) | No | Yes |
+| Server-backed entity method proposals (E8.4.4) | No | Yes |
+| @ManyToOne navigation proposals (walk JPA metamodel) | No | Yes |
+| Debounced compile-check while typing | No | Yes |
+| Parameter hints | No | Future |
 | Go-to-definition (base class methods) | No | Future |
 | Inline documentation (Javadoc hover) | No | Future |
+
+### E8.8 Styling Integration
+
+The editor follows the centralized styling from `frontendStyling.md`:
+
+- **Border:** matches `inputDecorationTheme` border color, `BorderRadius.zero`.
+- **Background:** white, consistent with other form fields.
+- **Autocomplete popup:** sharp corners, `AppTheme.panelBorder`, `AppTheme.panelHeaderBackground`
+  for hover highlight.
+- **Error panel:** uses `AppTheme.panelBorder` separator, `AppTheme.spacingSm` padding,
+  monospace font for consistency with editor content.
+- **Theme:** `atomOneLightTheme` from `re_highlight` (light theme matching the app's overall
+  appearance). Dark theme variant available for future preference toggle.
 
 ---
 
@@ -2378,7 +2750,7 @@ E1 (Expression model & tree)              ← Foundation
   │
   ├── E4 (Admin editor)                   ← Depends on E1, uses E6 for proposals
   │     │
-  │     └── E8 (Code editor / IDE)        ← Future, depends on E4 + E7
+  │     └── E8 (Code editor / re_editor)   ← Depends on E4 + E7
   │           ├── Phase 1: Monaco/CodeMirror + error markers
   │           └── Phase 2: server-backed autocomplete
   │
