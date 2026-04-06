@@ -184,11 +184,18 @@ Returns a paginated response wrapping rows as flat maps with all columns resolve
 3. Resolve the `entityProviderRef` to get the entity class and query all entities.
 4. For each entity, always put `id` into the row first.
 5. For each `TableColumn`:
-   - If the column has no `entityRendererRef`: read the attribute value via reflection (same as `DataFormPersistenceService.getProperty()`). If the value is a JPA entity (relationship), extract its ID.
-   - If the column has an `entityRendererRef`: read the relationship entity, build a Mustache context from its attributes, render the template, and use the rendered string as the column value.
+   - Resolve the column value using `ColumnRenderer.resolveValue(entity, key)`, which supports
+     dot-separated paths (e.g., `"name"`, `"producer.name"`). See `gridElement.md` Task G3.
+   - If the final value is a JPA entity and `entityRendererRef` is set: apply the Mustache
+     template via `ColumnRenderer.resolveAndRender()`.
+   - If the final value is a JPA entity without renderer: fall back to the entity's `id`.
+   - If the final value is a primitive/basic: use directly.
 6. Return the list of row maps.
 
-**Hibernate proxy handling:** When detecting whether a value is a JPA entity (for relationship column rendering), the `isJpaEntity` check must walk the class hierarchy since Hibernate wraps `@ManyToOne` entities in proxy subclasses, and `@Entity` is not `@Inherited`. The same applies to `buildEntityContext` which must resolve the actual `@Entity`-annotated class before querying the JPA metamodel.
+**Shared utility:** The column rendering logic (value resolution, Mustache rendering, JPA entity
+detection, Hibernate proxy handling) is provided by the shared `ColumnRenderer` component
+defined in `gridElement.md` Task G3. Both `ViewDataService` and `GridDataService` delegate to it,
+eliminating duplication.
 
 ### V2.3 Generic Delete Endpoint
 
@@ -293,3 +300,5 @@ Task V3 depends on both V2 (data endpoint) and V1 (tree model in frontend).
 - **Deep Copy** of AppConfig nodes is defined in `dataBinding.md` Task 7 — enables copy-then-modify for ViewNodes and EntityProviders.
 - **DataForm** (edit forms) are defined in `dataBinding.md` Task 1 and referenced by ENTITY_LIST ViewNodes.
 - **DataBindingService** proposals are reused for TableColumn key auto-completion.
+- **Shared ColumnRenderer** utility (dot-path resolution, Mustache rendering): `gridElement.md` Task G3.
+- **Frontend styling**: `frontendStyling.md` — ENTITY_LIST table consistency (S4), centralized theme (S1, S2).

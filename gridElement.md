@@ -29,8 +29,10 @@ proprietary mounts (X-Mount, created by Fuji) and adopted foreign mounts (M42, c
 | Test data (Fuji, ZeissIkon, mounts, mappings) | Done |
 | Frontend: AppConfig editor — Expression fields (type, baseClass, body, desc) | Done |
 | Frontend: AppConfig editor — filterInjectableRef on EntityProvider | Done |
-| **Frontend: GRID table rendering in DataForm editor** | **Pending (G1.6)** |
-| Frontend: GRID pagination | Pending |
+| **Shared `ColumnRenderer` utility (dot-path getProperty, Mustache rendering)** | **Pending (G3)** |
+| **Parameterized `buildTableColumn` in tree builder (DRY)** | **Pending (G4)** |
+| Frontend: GRID table rendering in DataForm editor | Done (G1.6) |
+| Frontend: GRID pagination | Done (G1.6) |
 | Frontend: GRID add/edit/delete actions | Future |
 
 ---
@@ -183,7 +185,10 @@ Card
 
 Each `tableColumns` entry defines a column:
 - **header** → `DataColumn` label text.
-- **key** → the key to look up in each row map.
+- **key** → the key to look up in each row map. Supports dot-separated paths (e.g.,
+  `"cameraLensMount"`, `"cameraLensMount.producer"`) — the backend resolves these by walking
+  the getter chain (see Task G3). The final value is either rendered via EntityRenderer
+  (if the value is a JPA entity and `entityRendererRef` is set) or used directly (primitives).
 - The response already contains rendered values (Mustache-applied for relationship columns),
   so the frontend simply displays `row[key].toString()`.
 
@@ -322,9 +327,187 @@ Task E2.8 for the full runtime flow.
 
 ---
 
+## Task G3 — Shared Column Renderer with Dot-Path Support
+
+**Goal:** Extract the duplicated column rendering logic from `ViewDataService` and `GridDataService`
+into a shared `ColumnRenderer` utility, and add dot-path traversal for column `key` values.
+
+### G3.1 Motivation
+
+Both `ViewDataService` (ENTITY_LIST tables) and `GridDataService` (GRID elements) contain
+near-identical private methods for column value resolution:
+
+- `getProperty(entity, fieldName)` — single-level getter invocation
+- `buildEntityContext(entity)` — JPA metamodel introspection for Mustache context
+- `isJpaEntity(clazz)` — class hierarchy walk for `@Entity` annotation
+- `getId(entity)` — reflective `getId()` call
+- `resolveEntityClass(entity)` — Hibernate proxy resolution
+
+This violates DRY and means bug fixes or enhancements (like dot-path support) must be applied
+in two places.
+
+### G3.2 `ColumnRenderer` Utility
+
+A new shared Spring `@Component` class `ColumnRenderer` in the `appconfig.service` package that
+encapsulates all column value resolution logic.
+
+```java
+@Component
+public class ColumnRenderer {
+
+    private final EntityManager entityManager;
+
+    /**
+     * Resolves a single column value from an entity using a dot-separated key path.
+     *
+     * Examples:
+     *   "name"                    → entity.getName()
+     *   "cameraLensMount"         → entity.getCameraLensMount()  (returns JPA entity)
+     *   "cameraLensMount.name"    → entity.getCameraLensMount().getName()
+     *   "cameraLensMount.producer"→ entity.getCameraLensMount().getProducer()
+     */
+    public Object resolveValue(Object entity, String dotPath) { ... }
+
+    /**
+     * Resolves a column value and applies EntityRenderer if the final value is a JPA entity.
+     * Returns a display-ready Object (String for rendered entities, raw value for primitives).
+     */
+    public Object resolveAndRender(Object entity, String dotPath, Template rendererTemplate) { ... }
+
+    /**
+     * Builds a Mustache context map from a JPA entity's basic (non-relationship) attributes.
+     */
+    public Map<String, Object> buildEntityContext(Object entity) { ... }
+
+    public Long getId(Object entity) { ... }
+    public boolean isJpaEntity(Class<?> clazz) { ... }
+    public Class<?> resolveEntityClass(Object entity) { ... }
+}
+```
+
+### G3.3 Dot-Path `resolveValue`
+
+The `resolveValue` method walks the dot-separated path by calling successive getters:
+
+```java
+public Object resolveValue(Object entity, String dotPath) {
+    String[] segments = dotPath.split("\\.");
+    Object current = entity;
+    for (String segment : segments) {
+        if (current == null) return null;
+        current = getProperty(current, segment);
+    }
+    return current;
+}
+```
+
+This follows the same convention as `FilterExecutor.walkPath()` (which does dot-path traversal
+for JPA Criteria paths) and `DataFormElement.dataBinding` (which uses dot-paths for entity
+attribute binding).
+
+### G3.4 Migration of Existing Services
+
+Both `ViewDataService` and `GridDataService` inject `ColumnRenderer` and delegate to it:
+
+```java
+// Before (in both services):
+Object value = getProperty(entity, key);
+if (value != null && isJpaEntity(value.getClass())) { ... }
+
+// After:
+Object rendered = columnRenderer.resolveAndRender(entity, col.getKey(), rendererTemplate);
+row.put(col.getKey(), rendered);
+```
+
+The private `getProperty`, `buildEntityContext`, `isJpaEntity`, `getId`, and `resolveEntityClass`
+methods are removed from both services.
+
+### G3.5 Impact on Existing Column Keys
+
+Existing single-segment keys (e.g., `"name"`, `"cameraLensMount"`) continue to work unchanged —
+they are simply one-segment dot-paths. No config migration is needed.
+
+---
+
+## Task G4 — Parameterized Tree Builder for TableColumn
+
+**Goal:** Eliminate the duplicated `buildTableColumn` / `buildGridTableColumn` methods in
+`AppConfigTreeBuilder` by parameterizing the child type code strings.
+
+### G4.1 Current State
+
+`AppConfigTreeBuilder` has two near-identical methods:
+
+- `buildTableColumn(entity, childrenByParentId)` — matches `"TableColumnKey"`,
+  `"TableColumnHeader"`, `"TableColumnRendererRef"`
+- `buildGridTableColumn(entity, childrenByParentId)` — matches `"GridTableColumnKey"`,
+  `"GridTableColumnHeader"`, `"GridTableColumnRendererRef"`
+
+Both produce the same `TableColumn` object with the same logic; only the child type code
+strings differ.
+
+### G4.2 Refactored Method
+
+Replace both methods with a single parameterized method:
+
+```java
+private TableColumn buildTableColumn(AppConfigObjectEntity entity,
+                                      Map<Long, List<AppConfigObjectEntity>> childrenByParentId,
+                                      String keyTypeCode, String headerTypeCode,
+                                      String rendererRefTypeCode) {
+    TableColumn column = new TableColumn();
+    column.setId(entity.getId());
+    column.setCode(entity.getCode());
+
+    for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+        String childTypeCode = child.getType().getCode();
+        if (keyTypeCode.equals(childTypeCode)) {
+            column.setKey(child.getCode());
+            column.setKeyNodeId(child.getId());
+        } else if (headerTypeCode.equals(childTypeCode)) {
+            column.setHeader(child.getCode());
+            column.setHeaderNodeId(child.getId());
+        } else if (rendererRefTypeCode.equals(childTypeCode)) {
+            column.setEntityRendererRef(child.getCode());
+            column.setEntityRendererRefNodeId(child.getId());
+        }
+    }
+    return column;
+}
+```
+
+### G4.3 Call Sites
+
+```java
+// In buildViewNode():
+} else if ("TableColumn".equals(childTypeCode)) {
+    node.getTableColumns().add(buildTableColumn(child, childrenByParentId,
+            "TableColumnKey", "TableColumnHeader", "TableColumnRendererRef"));
+}
+
+// In buildDataFormElement():
+} else if ("GridTableColumn".equals(childTypeCode)) {
+    element.getTableColumns().add(buildTableColumn(child, childrenByParentId,
+            "GridTableColumnKey", "GridTableColumnHeader", "GridTableColumnRendererRef"));
+}
+```
+
+### G4.4 AppConfig Type System
+
+The separate type entries in the seeder (`TableColumn` / `GridTableColumn` with their
+respective children) remain as-is. Each type entry has a single parent (`ViewNode` or
+`DataFormElement`), which is a fundamental constraint of the `AppConfigTypeEntity` model
+(single `@ManyToOne parentType`). The duplication at the type level is small (4 rows each)
+and unavoidable without a multi-parent schema change, which would add complexity
+disproportionate to the benefit.
+
+---
+
 ## Cross-References
 
 - **Expression system** and FilterInjectable: `expressions.md` (Task E2.8 for this use case, E7.5 for FilterInjectable base class)
 - **TableColumn model**: `viewIntegration.md` Task V1
 - **EntityProvider / FilterNode**: `dataBinding.md` Task 2 and Task 6
 - **CameraLensMount2CameraProducer entity**: `domainEntities.md` Task D2
+- **Shared ColumnRenderer**: Used by `ViewDataService` (viewIntegration.md V2) and `GridDataService` (G1)
+- **Frontend styling**: `frontendStyling.md` — GRID panel pattern (S3), centralized theme (S1, S2)
