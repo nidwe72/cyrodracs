@@ -154,6 +154,26 @@ public class AppConfigTypeSeeder {
         ensureType("GridTableColumnRendererRef", gridTableColumnType, "entityRendererRef", false, false,
                 "java.lang.String");
 
+        // AddAction on DataFormElement (generic: used by GRID, reusable by other element types)
+        AppConfigTypeEntity addActionType = ensureType("AddAction", dataFormElementType, "addAction", false, false,
+                "sciens.cyrodracs.appconfig.AddAction");
+
+        ensureType("AddActionTarget", addActionType, "targetDataFormRef", false, false,
+                "java.lang.String");
+
+        ensureType("AddActionLabel", addActionType, "childLabel", false, false,
+                "java.lang.String");
+
+        // ContextBinding on AddAction (generic: target/source pair for context injection)
+        AppConfigTypeEntity contextBindingType = ensureType("ContextBinding", addActionType, "contextBindings", true, false,
+                "sciens.cyrodracs.appconfig.ContextBinding");
+
+        ensureType("ContextBindingTarget", contextBindingType, "target", false, false,
+                "java.lang.String");
+
+        ensureType("ContextBindingSource", contextBindingType, "source", false, false,
+                "java.lang.String");
+
         // ReloadOnChange on DataFormElement
         ensureType("ReloadOnChange", dataFormElementType, "reloadOnChange", false, false,
                 "java.lang.Boolean");

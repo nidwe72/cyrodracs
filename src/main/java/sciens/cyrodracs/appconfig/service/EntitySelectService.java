@@ -78,10 +78,26 @@ public class EntitySelectService {
             if ("id".equals(attr.getName())) continue;
             Object value = getProperty(entity, attr.getName());
             if (value != null) {
-                context.put(attr.getName(), value.toString());
+                if (isJpaEntity(value.getClass())) {
+                    // Nested relationship: build a sub-context for Mustache {{relation.field}}
+                    context.put(attr.getName(), buildContext(value, value.getClass()));
+                } else {
+                    context.put(attr.getName(), value.toString());
+                }
             }
         }
         return context;
+    }
+
+    private boolean isJpaEntity(Class<?> clazz) {
+        Class<?> current = clazz;
+        while (current != null && current != Object.class) {
+            if (current.isAnnotationPresent(jakarta.persistence.Entity.class)) {
+                return true;
+            }
+            current = current.getSuperclass();
+        }
+        return false;
     }
 
     private Object getProperty(Object entity, String fieldName) {

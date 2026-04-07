@@ -116,6 +116,37 @@ public class GridDataService {
         return new GridPagedResult(rows, paged.totalCount(), page, pageSize);
     }
 
+    @Transactional
+    public void deleteGridEntity(String dataFormCode, String elementCode, Long entityId) {
+        AppConfig config = appConfigStore.getAppConfig();
+
+        DataForm dataForm = config.getDataForms().get(dataFormCode);
+        if (dataForm == null) {
+            throw new IllegalArgumentException("DataForm not found: " + dataFormCode);
+        }
+
+        DataFormElement element = dataForm.getElements().get(elementCode);
+        if (element == null || element.getType() != DataFormElementType.GRID) {
+            throw new IllegalArgumentException("GRID element not found: " + elementCode);
+        }
+
+        if (element.getEntityProviderRef() == null) {
+            throw new IllegalStateException("GRID element '" + elementCode + "' has no entityProviderRef");
+        }
+
+        EntityProvider provider = config.getEntityProviders().get(element.getEntityProviderRef());
+        if (provider == null || provider.getEntityType() == null) {
+            throw new IllegalStateException("EntityProvider not found: " + element.getEntityProviderRef());
+        }
+
+        Class<?> gridEntityClass = resolveClass(provider.getEntityType().getFqcn());
+        Object entity = entityManager.find(gridEntityClass, entityId);
+        if (entity == null) {
+            throw new IllegalArgumentException("Entity not found: " + gridEntityClass.getSimpleName() + " id=" + entityId);
+        }
+        entityManager.remove(entity);
+    }
+
     private Class<?> resolveClass(String fqcn) {
         try { return Class.forName(fqcn); }
         catch (ClassNotFoundException e) { throw new IllegalArgumentException("Entity class not found: " + fqcn, e); }

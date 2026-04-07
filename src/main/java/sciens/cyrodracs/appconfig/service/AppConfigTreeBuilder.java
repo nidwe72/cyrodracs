@@ -20,6 +20,8 @@ import sciens.cyrodracs.appconfig.ViewNodeType;
 import sciens.cyrodracs.appconfig.Expression;
 import sciens.cyrodracs.appconfig.ExpressionType;
 import sciens.cyrodracs.appconfig.InjectableBaseClass;
+import sciens.cyrodracs.appconfig.AddAction;
+import sciens.cyrodracs.appconfig.ContextBinding;
 import sciens.cyrodracs.appconfig.VisibilityRule;
 import sciens.cyrodracs.appconfig.VisibilityOperator;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectEntity;
@@ -145,9 +147,51 @@ public class AppConfigTreeBuilder {
                 element.setReloadOnChangeNodeId(child.getId());
             } else if ("VisibilityRule".equals(childTypeCode)) {
                 element.setVisibilityRule(buildVisibilityRule(child, childrenByParentId));
+            } else if ("AddAction".equals(childTypeCode)) {
+                element.setAddAction(buildAddAction(child, childrenByParentId));
             }
         }
         return element;
+    }
+
+    private AddAction buildAddAction(AppConfigObjectEntity entity,
+                                      Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        AddAction action = new AddAction();
+        action.setId(entity.getId());
+        action.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("AddActionTarget".equals(childTypeCode)) {
+                action.setTargetDataFormRef(child.getCode());
+                action.setTargetDataFormRefNodeId(child.getId());
+            } else if ("AddActionLabel".equals(childTypeCode)) {
+                action.setChildLabel(child.getCode());
+                action.setChildLabelNodeId(child.getId());
+            } else if ("ContextBinding".equals(childTypeCode)) {
+                action.getContextBindings().add(buildContextBinding(child, childrenByParentId));
+            }
+        }
+        return action;
+    }
+
+    private ContextBinding buildContextBinding(AppConfigObjectEntity entity,
+                                                Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        ContextBinding binding = new ContextBinding();
+        binding.setId(entity.getId());
+        binding.setCode(entity.getCode());
+
+        for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
+            String childTypeCode = child.getType().getCode();
+            if ("ContextBindingTarget".equals(childTypeCode)) {
+                binding.setTarget(child.getCode());
+                binding.setTargetNodeId(child.getId());
+            } else if ("ContextBindingSource".equals(childTypeCode)) {
+                binding.setSource(child.getCode());
+                binding.setSourceNodeId(child.getId());
+            }
+        }
+        return binding;
     }
 
     private EntityProvider buildEntityProvider(AppConfigObjectEntity entity,

@@ -3,6 +3,8 @@ package sciens.cyrodracs.appconfig.service;
 import com.samskivert.mustache.Mustache;
 import com.samskivert.mustache.Template;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.metamodel.EntityType;
+import jakarta.persistence.metamodel.SingularAttribute;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import sciens.cyrodracs.appconfig.AppConfig;
@@ -115,7 +117,33 @@ public class ViewDataService {
         if (entity == null) {
             throw new IllegalArgumentException("Entity not found: " + entityClass.getSimpleName() + " id=" + entityId);
         }
+        // Application-level cascade: delete all entities that reference this one via @ManyToOne
+        deleteDependents(entityClass, entityId);
         entityManager.remove(entity);
+    }
+
+    /**
+     * Finds and deletes all entities across all JPA entity types that have a @ManyToOne
+     * reference to the given entity class and ID. This provides application-level cascade
+     * delete for databases (like SQLite) that don't enforce FK constraints.
+     */
+    private void deleteDependents(Class<?> targetClass, Long targetId) {
+        for (EntityType<?> entityType : entityManager.getMetamodel().getEntities()) {
+            for (SingularAttribute<?, ?> attr : entityType.getSingularAttributes()) {
+                if (attr.getJavaType().isAssignableFrom(targetClass)
+                        || targetClass.isAssignableFrom(attr.getJavaType())) {
+                    try {
+                        String jpql = "DELETE FROM " + entityType.getName()
+                                + " e WHERE e." + attr.getName() + ".id = :targetId";
+                        entityManager.createQuery(jpql)
+                                .setParameter("targetId", targetId)
+                                .executeUpdate();
+                    } catch (Exception ignored) {
+                        // Attribute might not be a navigable relationship — skip
+                    }
+                }
+            }
+        }
     }
 
     private ViewNode resolveViewNode(String code) {

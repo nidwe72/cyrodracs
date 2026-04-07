@@ -9,9 +9,15 @@ import sciens.cyrodracs.appconfig.DataForm;
 import sciens.cyrodracs.appconfig.DataFormData;
 import sciens.cyrodracs.appconfig.DataFormElement;
 import sciens.cyrodracs.appconfig.DataFormElementType;
+import sciens.cyrodracs.appconfig.PendingChild;
+
+import jakarta.persistence.Table;
+import jakarta.persistence.UniqueConstraint;
 
 import java.lang.reflect.Method;
 import java.time.YearMonth;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 @Service
@@ -23,6 +29,29 @@ public class DataFormPersistenceService {
     public DataFormPersistenceService(AppConfigStore appConfigStore, EntityManager entityManager) {
         this.appConfigStore = appConfigStore;
         this.entityManager = entityManager;
+    }
+
+    @Transactional
+    public DataFormData saveWithChildren(DataFormData data) {
+        DataFormData saved = save(data);
+        Long parentId = saved.getEntityId();
+
+        if (data.getPendingChildren() != null) {
+            for (PendingChild child : data.getPendingChildren()) {
+                DataFormData childData = new DataFormData();
+                childData.setDataFormCode(child.getDataFormCode());
+                childData.setValues(new java.util.LinkedHashMap<>(child.getValues()));
+                // Inject parent ID into the context binding target field
+                if (child.getContextBindingTarget() != null) {
+                    childData.getValues().put(child.getContextBindingTarget(), parentId);
+                }
+                // Recursive: child may have its own pending children
+                childData.setPendingChildren(child.getPendingChildren());
+                saveWithChildren(childData);
+            }
+        }
+
+        return saved;
     }
 
     @Transactional
@@ -46,6 +75,7 @@ public class DataFormPersistenceService {
         }
 
         applyValues(entity, form, data.getValues());
+        checkUniqueConstraints(entity, entityClass, data.getEntityId());
         entity = entityManager.merge(entity);
 
         Long persistedId = getId(entity);
@@ -110,6 +140,92 @@ public class DataFormPersistenceService {
             String bindingPath = resolveBindingPath(form, entry.getKey());
             setProperty(entity, bindingPath, entry.getValue());
         }
+    }
+
+    /**
+     * Application-level unique constraint enforcement. Checks @UniqueConstraint annotations
+     * on the entity class and queries the DB via JPQL to verify no duplicate exists.
+     * Needed because SQLite with ddl-auto=update cannot add constraints to existing tables.
+     */
+    private void checkUniqueConstraints(Object entity, Class<?> entityClass, Long existingId) {
+        Table tableAnn = entityClass.getAnnotation(Table.class);
+        if (tableAnn == null) return;
+        for (UniqueConstraint uc : tableAnn.uniqueConstraints()) {
+            String[] columnNames = uc.columnNames();
+            if (columnNames.length == 0) continue;
+
+            List<String> fieldNames = new ArrayList<>();
+            List<Object> paramValues = new ArrayList<>();
+            boolean allResolved = true;
+
+            for (String colName : columnNames) {
+                String fieldName = mapColumnToField(entityClass, colName);
+                if (fieldName == null) { allResolved = false; break; }
+
+                Object value = getProperty(entity, fieldName);
+                if (value == null) { allResolved = false; break; }
+
+                // For @ManyToOne relationships, the getter returns the entity or its ID.
+                // Extract the ID for comparison.
+                boolean isRelationship = false;
+                try {
+                    java.lang.reflect.Field f = entityClass.getDeclaredField(fieldName);
+                    isRelationship = f.isAnnotationPresent(jakarta.persistence.ManyToOne.class);
+                } catch (NoSuchFieldException ignored) {}
+
+                if (isRelationship) {
+                    // value might be a JPA entity or a raw Long (depending on timing)
+                    Object refId = (value instanceof Long) ? value : getId(value);
+                    fieldNames.add(fieldName + ".id");
+                    paramValues.add(refId);
+                } else {
+                    fieldNames.add(fieldName);
+                    paramValues.add(value);
+                }
+            }
+
+            if (!allResolved) continue;
+
+            // Build JPQL: SELECT COUNT(e) FROM Entity e WHERE e.field1 = :p0 AND e.field2 = :p1 ...
+            StringBuilder jpql = new StringBuilder("SELECT COUNT(e) FROM ")
+                    .append(entityClass.getSimpleName()).append(" e WHERE ");
+            for (int i = 0; i < fieldNames.size(); i++) {
+                if (i > 0) jpql.append(" AND ");
+                jpql.append("e.").append(fieldNames.get(i)).append(" = :p").append(i);
+            }
+            if (existingId != null) {
+                jpql.append(" AND e.id <> :existingId");
+            }
+
+            var query = entityManager.createQuery(jpql.toString(), Long.class);
+            for (int i = 0; i < paramValues.size(); i++) {
+                query.setParameter("p" + i, paramValues.get(i));
+            }
+            if (existingId != null) {
+                query.setParameter("existingId", existingId);
+            }
+
+            Long count = query.getSingleResult();
+            if (count > 0) {
+                // Build user-friendly field names (strip .id suffix)
+                List<String> labels = fieldNames.stream()
+                        .map(f -> f.endsWith(".id") ? f.substring(0, f.length() - 3) : f)
+                        .toList();
+                throw new IllegalArgumentException(
+                        "Duplicate: an entry with the same " +
+                        String.join(" and ", labels) + " already exists");
+            }
+        }
+    }
+
+    private String mapColumnToField(Class<?> entityClass, String columnName) {
+        for (java.lang.reflect.Field field : entityClass.getDeclaredFields()) {
+            jakarta.persistence.JoinColumn jc = field.getAnnotation(jakarta.persistence.JoinColumn.class);
+            if (jc != null && columnName.equals(jc.name())) return field.getName();
+            jakarta.persistence.Column col = field.getAnnotation(jakarta.persistence.Column.class);
+            if (col != null && columnName.equals(col.name())) return field.getName();
+        }
+        return null;
     }
 
     private String resolveBindingPath(DataForm form, String elementCode) {

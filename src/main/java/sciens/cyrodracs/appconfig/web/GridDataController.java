@@ -40,5 +40,18 @@ public class GridDataController {
         }
     }
 
+    @DeleteMapping("/{dataFormCode}/{elementCode}/{entityId}")
+    public ResponseEntity<Void> deleteGridEntity(
+            @PathVariable String dataFormCode,
+            @PathVariable String elementCode,
+            @PathVariable Long entityId) {
+        try {
+            gridDataService.deleteGridEntity(dataFormCode, elementCode, entityId);
+            return ResponseEntity.ok().build();
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().build();
+        }
+    }
+
     public record GridDataRequest(Long entityId, Map<String, String> formState) {}
 }

@@ -17,6 +17,8 @@ public class DataFormElement implements Coded {
     private Long entityRendererRefNodeId;
     /** GRID: column definitions for the embedded table. */
     private List<TableColumn> tableColumns = new ArrayList<>();
+    /** GRID: add/edit action configuration with context bindings. */
+    private AddAction addAction;
     /** When true, changing this element triggers reload of dependent elements (e.g., GRIDs). */
     private boolean reloadOnChange;
     private Long reloadOnChangeNodeId;
@@ -57,6 +59,9 @@ public class DataFormElement implements Coded {
 
     public List<TableColumn> getTableColumns() { return tableColumns; }
     public void setTableColumns(List<TableColumn> tableColumns) { this.tableColumns = tableColumns; }
+
+    public AddAction getAddAction() { return addAction; }
+    public void setAddAction(AddAction addAction) { this.addAction = addAction; }
 
     public boolean isReloadOnChange() { return reloadOnChange; }
     public void setReloadOnChange(boolean reloadOnChange) { this.reloadOnChange = reloadOnChange; }

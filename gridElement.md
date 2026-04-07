@@ -33,7 +33,15 @@ proprietary mounts (X-Mount, created by Fuji) and adopted foreign mounts (M42, c
 | Parameterized `buildTableColumn` in tree builder (DRY) | Done (G4) |
 | Frontend: GRID table rendering in DataForm editor | Done (G1.6) |
 | Frontend: GRID pagination | Done (G1.6) |
-| Frontend: GRID add/edit/delete actions | Future |
+| Frontend: GRID add/edit/delete actions | Done (G5–G7) |
+| Pending children for new parent entities | Done (G7.6) |
+| Generic constraint violation error messages | Done (G7.7) |
+| `AddAction` + `ContextBinding` models, seeder, tree builder | Done (G6) |
+| `EditorStack` + stack path tree (frontend) | Done (G5) |
+| Standalone ViewNode for CameraLensMount2CameraProducer | Done (G8) |
+| `EntitySelectService` nested relationship rendering | Done (G6.8 fix) |
+| Application-level cascade delete (`ViewDataService`) | Done (SQLite fix) |
+| Application-level unique constraint check (`DataFormPersistenceService`) | Done (SQLite fix) |
 
 ---
 
@@ -503,6 +511,846 @@ disproportionate to the benefit.
 
 ---
 
+## Task G5 — EditorStack: Stacked Navigation for Nested Editing
+
+**Goal:** Introduce an EditorStack navigation model that replaces modal dialogs with a composable,
+recursive stack of full-width editor views, connected by a breadcrumb trail.
+
+### G5.1 Motivation
+
+The GRID element currently displays related entities but offers no way to add or edit them.
+The naive approach — a modal dialog — breaks down at recursion: if the child editor itself
+contains a GRID that needs an "add" action, modals stack awkwardly. A stacked full-width editor
+model is inherently recursive, composable, and gives each editor proper screen space.
+
+### G5.2 Concept: EditorStack
+
+The frontend maintains an **EditorStack** — an ordered list of **EditorFrame** objects. Each
+frame represents one active editor context.
+
+```
+EditorStack
+├── Frame 0: CameraProducer "Fuji" (dataForm: cameraProducerForm, entityId: 4)
+└── Frame 1: New CameraLensMount2CameraProducer (dataForm: lensMountMappingForm, entityId: null)
+              contextBindings: { cameraProducer: 4 }
+```
+
+**Rules:**
+- Only the **topmost frame** (highest index) is visible and interactive.
+- Parent frames are **preserved in memory** — unsaved edits, scroll position, form state remain
+  intact while a child frame is on top.
+- Parent frames are **non-editable** while a child frame is on top. They are frozen — no user
+  interaction, no programmatic mutation. This prevents side effects: the child's contextBindings
+  were resolved from the parent's state at push time, and that state must not change while the
+  child is active.
+- **Push** adds a new frame on top (triggered by GRID add/edit actions).
+- **Pop** removes the topmost frame, revealing the parent. The parent GRID reloads if the child
+  performed a save.
+
+### G5.3 Stack Path Tree
+
+The stack path is rendered as a **vertical tree** above the editor area, mirroring the
+visual language of the left-side navigation tree. The root is the ViewNode that started
+the flow, followed by each EditorFrame as an indented child. The active (current) node
+is highlighted.
+
+**At stack depth 2 (editing within a child editor):**
+```
+▸ Camera Producers                          ← ViewNode (clickable → back to list)
+  ▸ CameraProducer: Fuji                   ← Frame 0 (clickable → pops to here)
+    ● New LensMount Assignment              ← Frame 1 (active, highlighted)
+```
+
+**At stack depth 1 (normal editing, no child pushed):**
+```
+▸ Camera Producers                          ← ViewNode (clickable → back to list)
+  ● CameraProducer: Fuji                   ← Frame 0 (active, highlighted)
+```
+
+**At stack depth 0 (list view, no entity opened):**
+```
+● Camera Producers                          ← ViewNode label (active, highlighted)
+```
+
+**Rendering rules:**
+- Each line is icon + label, indented by level. Compact, left-aligned above the editor.
+- `▸` for non-active nodes (clickable). `●` for the active node (not clickable).
+- Clicking a non-active node pops all frames above it. If any popped frame has unsaved
+  changes, a **single** confirmation dialog is shown (not per-frame).
+- The ViewNode root is always present — clicking it pops the entire stack and returns to
+  the list table view.
+
+**Label resolution:**
+- **ViewNode root:** Uses `ViewNode.label` (e.g., "Camera Producers").
+- **Existing entity frame:** `{DataForm.entity.label}: {entityRendererRef output}` — e.g., "CameraProducer: Fuji".
+- **New entity frame:** `"New {DataForm.entity.label}"` — e.g., "New LensMount Assignment".
+- The label can also be overridden via `addAction.childLabel` (see G6).
+
+### G5.4 EditorFrame Model (Frontend)
+
+```dart
+class EditorFrame {
+  final String dataFormCode;
+  final Long? entityId;              // null for create-new
+  final Map<String, dynamic> contextBindings;  // pre-seeded field values
+  final String? breadcrumbLabel;     // override label, or null for auto
+  final String? sourceElementCode;   // which element triggered this push (for reload on pop)
+
+  // Preserved state (set while frame is active, restored when frame becomes top again)
+  Map<String, dynamic>? formState;
+  double? scrollOffset;
+
+  // Pending children: child entities "saved" while this frame has no entityId.
+  // Stored here until this frame is persisted, then sent to backend together.
+  List<PendingChild> pendingChildren = [];
+}
+
+class PendingChild {
+  final String dataFormCode;           // child DataForm
+  final String contextBindingTarget;   // which field in child receives parent ID
+  final Map<String, dynamic> values;   // child form values (without parent reference)
+  final String? sourceElementCode;     // which element triggered (for GRID display)
+  final List<PendingChild> pendingChildren;  // recursive: grandchildren
+}
+```
+
+### G5.5 EditorStack State Management
+
+The EditorStack lives at the **view level** (the detail panel), not globally. Each ENTITY_LIST
+ViewNode activation starts with a fresh stack containing a single frame (or zero frames if
+showing the list table). Navigating to a different ViewNode discards the stack entirely (with
+unsaved-changes warning if applicable).
+
+**State transitions:**
+
+| Action | Effect |
+|---|---|
+| User opens entity from list table | Push frame 0: `{dataFormCode, entityId}` |
+| User clicks "Add" on an element | Push frame N+1: `{targetDataFormCode, null, contextBindings}` |
+| User clicks "Edit" on a GRID row | Push frame N+1: `{targetDataFormCode, rowEntityId, contextBindings}` |
+| User saves in child frame (parent has ID) | Persist child immediately, pop frame, reload parent element |
+| User saves in child frame (parent has no ID) | Store as pendingChild on parent frame, pop frame, update parent element display |
+| User cancels / clicks stack path parent | Pop frame(s), no reload, discard pending data from popped frame |
+| User navigates to different ViewNode | Discard entire stack (with unsaved warning) |
+
+### G5.6 Navigation Tree Interaction
+
+The left-side navigation tree remains **fully interactive** while the editor stack is deep.
+Clicking a different ViewNode triggers the standard unsaved-changes warning if any frame in
+the stack has pending edits. On confirmation, the entire stack is discarded and the new
+ViewNode is activated. Locking or dimming the navigation tree would feel restrictive and
+is not necessary — the unsaved-changes warning is sufficient protection.
+
+### G5.7 Unsaved Changes Handling
+
+When an action would pop one or more frames with unsaved changes (clicking a stack path
+ancestor, navigating away, or cancelling):
+- A **single** confirmation dialog is shown: "You have unsaved changes. Discard and go back?"
+- Not one dialog per frame — that would be tedious and confusing.
+- The dialog does not enumerate which frames have changes; it simply warns that changes exist.
+
+### G5.8 Stack Depth
+
+No artificial limit on stack depth. The EditorStack is technically recursive and unbounded.
+However, deep stacking (3+ levels) is questionable UX — it is not actively encouraged or
+designed for. The practical depth for current use cases is 2 (parent editor + child creation
+from GRID). The architecture allows deeper stacking if a future use case demands it, but
+no special effort is spent optimizing the UX for depth > 2.
+
+### G5.9 Backend Implications
+
+The EditorStack navigation (push/pop, stack path tree, state preservation) is a **purely
+frontend concern**. The backend change is limited to one extension:
+
+- `DataFormPersistenceService.save()` and `.load()` work with any DataForm code and entity ID.
+- Context bindings are applied client-side before the save request — the backend receives a
+  normal `DataFormData` with pre-filled values.
+- No new endpoints are required for the stack navigation itself.
+- **Pending children:** The existing save endpoint is extended to accept an optional
+  `pendingChildren` list. See G7.6 for the full specification of this mechanism.
+
+---
+
+## Task G6 — AddAction and Context Bindings
+
+**Goal:** Define how a DataFormElement declares its "Add" (and "Edit") action, including which
+DataForm to open and which field values to pre-seed from the parent context. While the first
+use case is the GRID's [+] button, the `AddAction` and `ContextBinding` models are generic
+and reusable by other element types (e.g., a future "create new" option on ENTITY_SELECT).
+
+### G6.1 Design Principle: One DataForm, Dynamic Behavior
+
+A DataForm defines **structure** — what fields exist, their types, their data bindings.
+Context bindings define **runtime behavior** — which fields are pre-filled and locked in a
+given invocation. These are two separate concerns and must not be conflated.
+
+This means: there is always **one** DataForm per entity type (e.g., `lensMountMappingForm`
+for `CameraLensMount2CameraProducer`). The same DataForm is used regardless of how it is
+opened — standalone from the main tree, or pushed from a parent GRID. The difference lies
+entirely in the **caller's context bindings**, not in the form definition.
+
+**Analogy — partial function application:**
+
+| Invocation | Context bindings | Editable fields |
+|---|---|---|
+| Standalone (from ViewNode) | `{}` (none) | cameraProducer, cameraLensMount |
+| From CameraProducer GRID | `{ cameraProducer: ENTITY }` | cameraLensMount |
+| From CameraLensMount GRID (future) | `{ cameraLensMount: ENTITY }` | cameraProducer |
+
+The DataForm is the function signature. The contextBindings are partial arguments. This
+scales naturally: any number of parent contexts can reuse the same form, each binding
+different fields.
+
+**Consequences:**
+- **No duplicate DataForms.** Never create a "standalone variant" and a "stacked variant"
+  of the same form. The form is always the same.
+- **Read-only is runtime, not config.** A DataFormElement does NOT have a static `readOnly`
+  flag for this purpose. The read-only state is determined dynamically by the frontend:
+  "is this element's code present in the active contextBindings?" If yes → read-only.
+  If no → editable.
+- **Pre-fill is runtime, not config.** The initial value of a context-bound field comes from
+  the resolved binding expression, not from a default value in the DataForm.
+- **The backend is unaware.** `DataFormPersistenceService.save()` receives a flat
+  `DataFormData` with all field values — it does not know or care which were context-bound.
+  The frontend includes the bound values in the save request like any other field value.
+
+### G6.2 AddAction on DataFormElement
+
+The DataFormElement gains a new optional sub-object `addAction` that configures the "Add"
+button behavior. Currently used by GRID elements; the model is generic and can be reused
+by other element types in the future.
+
+```java
+public class AddAction implements Coded {
+    Long id;
+    String code;
+    String targetDataFormRef;             // which DataForm to push onto the EditorStack
+    Long targetDataFormRefNodeId;
+    List<ContextBinding> contextBindings; // injected values from parent
+    String childLabel;                    // optional stack path label override
+    Long childLabelNodeId;
+}
+
+public class ContextBinding implements Coded {
+    Long id;
+    String code;
+    String target;        // child DataForm element code (e.g., "cameraProducer")
+    Long targetNodeId;
+    String source;        // ENTITY, ENTITY.fieldPath, etc.
+    Long sourceNodeId;
+}
+```
+
+### G6.3 AppConfig Tree Example
+
+```
+DataFormElement "lensMountMappings"
+├── type: GRID
+├── entityProviderRef: "mountsForCurrentProducer"
+├── tableColumns: [...]
+└── addAction:
+    ├── targetDataFormRef: "lensMountMappingForm"
+    ├── childLabel: "LensMount Assignment"
+    └── contextBindings:
+        └── "cameraProducer" → ENTITY
+```
+
+### G6.4 Context Binding: Target and Source
+
+A contextBinding entry maps a **target** (child DataForm element code) to a **source**
+(expression referencing the parent context). The parent's `addAction` defines the injection
+context into the child.
+
+**Target side** — the key of each contextBinding entry:
+- A field code in the child DataForm (e.g., `"cameraProducer"`).
+- This is conceptually the same as `DataFormElement.dataBinding` — a path on the child entity.
+- Auto-proposals are derived from the child entity type (resolved via
+  `addAction.targetDataFormRef` → child DataForm → `entity.fqcn` → JPA metadata).
+
+**Source side** — the value of each contextBinding entry:
+- Uses the `ENTITY` system keyword (uppercase to distinguish from field names).
+- `ENTITY` alone refers to the parent editor's entity (resolved as its ID at runtime).
+- `ENTITY.fieldPath` navigates into the parent entity's attributes using dot-path syntax.
+- Auto-proposals for the source side are derived from the parent entity type (resolved via
+  the GRID's parent DataForm → `entity.fqcn` → JPA metadata), prefixed with `ENTITY.`.
+
+**Source expression reference:**
+
+| Source expression | Resolves to | Example (parent = CameraProducer "Fuji") |
+|---|---|---|
+| `ENTITY` | Parent entity ID (Long) | `4` |
+| `ENTITY.name` | Scalar field value | `"Fuji"` |
+| `ENTITY.foundationYear` | Scalar field value | `"1934-01"` |
+| `ENTITY.someRelation` | Related entity ID (if @ManyToOne) | `7` (Long) |
+| `ENTITY.someRelation.name` | Transitive dot-path navigation | `"SomeValue"` |
+
+For the CameraLensMount2CameraProducer use case, only `ENTITY` is needed:
+- `"cameraProducer" → ENTITY` means: in the child form, the `cameraProducer` field is
+  pre-filled with the ID of the CameraProducer currently being edited.
+
+### G6.4.1 Auto-Proposals in Admin Editor
+
+When configuring a contextBinding in the AppConfig admin editor, both sides offer
+auto-proposals using the existing `DataBindingService` mechanism:
+
+```
+┌─ Context Binding ─────────────────────────────────────────────────┐
+│                                                                    │
+│  Target: [cameraProducer         ▼]   ← proposals from child      │
+│          ┌─────────────────────────┐     entity (CameraLensMount2  │
+│          │ cameraProducer          │     CameraProducer):          │
+│          │ cameraLensMount         │     field codes derived from  │
+│          └─────────────────────────┘     JPA metadata              │
+│                                                                    │
+│  Source: [ENTITY                  ▼]   ← ENTITY keyword +         │
+│          ┌─────────────────────────┐     proposals from parent     │
+│          │ ENTITY                  │     entity (CameraProducer):  │
+│          │ ENTITY.name             │     ENTITY prefix + field     │
+│          │ ENTITY.foundationYear   │     paths from JPA metadata   │
+│          │ ENTITY.shutdownYear     │                               │
+│          └─────────────────────────┘                               │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+The proposal resolution:
+- **Target proposals:** Resolve `addAction.targetDataFormRef` → child DataForm →
+  `entity.fqcn` → pass to `DataBindingService` → get attribute paths.
+- **Source proposals:** Walk up from contextBinding → addAction → GRID DataFormElement →
+  parent DataForm → `entity.fqcn` → pass to `DataBindingService` → prefix each result
+  with `ENTITY.`, plus `ENTITY` itself as the first proposal.
+
+### G6.5 Context Binding Application in Child Form (Frontend Logic)
+
+When a child EditorFrame is pushed with contextBindings, the frontend applies them
+dynamically. The DataForm itself is rendered unchanged — all elements are present. The
+runtime overlay is:
+
+```
+for each DataFormElement in the DataForm:
+  if element.code is a key in EditorFrame.contextBindings:
+    → resolve the binding expression to a concrete value
+    → set element's initial value to that resolved value
+    → render element as READ-ONLY (disabled input, muted style, optional lock icon)
+  else:
+    → render element normally (editable, default initial value from entity or empty)
+```
+
+**Visual treatment of context-bound fields:**
+- **Option A — Visible but locked:** Show the field with its resolved display value
+  (e.g., ENTITY_SELECT showing "Fuji"), but greyed out / disabled. The user sees which
+  producer is bound and understands the context.
+- **Option B — Hidden:** Omit the field entirely. Appropriate when the binding is
+  self-evident from the breadcrumb (e.g., breadcrumb says "CameraProducer: Fuji > ...").
+- **Recommendation:** Start with Option A (visible but locked). It's more transparent
+  and avoids confusion about "where did the producer value come from?" Hidden can be
+  offered later as an optional flag on the contextBinding.
+
+**No backend changes needed.** When the form is saved, the frontend includes the
+context-bound values in the `DataFormData.values` map alongside user-edited values.
+`DataFormPersistenceService` processes them identically — it has no concept of which
+values were user-supplied vs. context-bound.
+
+### G6.6 AppConfigType Rows (Seeder)
+
+| code | parent | fieldName | collection | enum | javaType |
+|---|---|---|---|---|---|
+| `AddAction` | `DataFormElement` | `addAction` | false | false | `...appconfig.AddAction` |
+| `AddActionTarget` | `AddAction` | `targetDataFormRef` | false | false | `java.lang.String` |
+| `AddActionLabel` | `AddAction` | `childLabel` | false | false | `java.lang.String` |
+| `ContextBinding` | `AddAction` | `contextBindings` | true | false | `...appconfig.ContextBinding` |
+| `ContextBindingTarget` | `ContextBinding` | `target` | false | false | `java.lang.String` |
+| `ContextBindingSource` | `ContextBinding` | `source` | false | false | `java.lang.String` |
+
+**Storage example for `"cameraProducer" → ENTITY`:**
+
+```
+AddAction (parent: DataFormElement "lensMountMappings")
+├── AddActionTarget  code="lensMountMappingForm"
+├── AddActionLabel   code="LensMount Assignment"
+└── ContextBinding   code="cameraProducerBinding"
+    ├── ContextBindingTarget  code="cameraProducer"
+    └── ContextBindingSource  code="ENTITY"
+```
+
+Each `ContextBinding` is an AppConfigObject with children for target and source. This
+follows the same structural pattern as `SortField` (which has children `SortFieldField`
+and `SortDirection`) and `TableColumn` (which has children for key, header, rendererRef).
+The `ENTITY` keyword and `ENTITY.fieldPath` expressions are stored as literal strings in
+the source child; the frontend resolves them at runtime against the parent editor's entity.
+
+### G6.7 The Target DataForm: `lensMountMappingForm`
+
+A single DataForm for CameraLensMount2CameraProducer, used in all contexts:
+
+```
+dataForms:
+  └── "lensMountMappingForm" (DataForm)
+      ├── entity: CAMERA_LENS_MOUNT_2_CAMERA_PRODUCER
+      └── elements:
+          ├── "cameraProducer" (DataFormElement)
+          │   ├── type: ENTITY_SELECT
+          │   ├── dataBinding: "cameraProducer"
+          │   ├── entityProviderRef: "allCameraProducers"
+          │   └── entityRendererRef: "producerCaption"
+          └── "cameraLensMount" (DataFormElement)
+              ├── type: ENTITY_SELECT
+              ├── dataBinding: "cameraLensMount"
+              ├── entityProviderRef: "allCameraLensMounts"
+              └── entityRendererRef: "lensMountWithProducerCaption"
+```
+
+**Same DataForm, different invocations:**
+
+| Context | contextBindings | Result |
+|---|---|---|
+| Standalone (ViewNode "Lens Mount Assignments") | `{}` | Both fields editable |
+| From CameraProducer GRID (addAction) | `{ cameraProducer: ENTITY }` | cameraProducer=locked, cameraLensMount=editable |
+| From CameraLensMount GRID (future) | `{ cameraLensMount: ENTITY }` | cameraLensMount=locked, cameraProducer=editable |
+
+### G6.8 EntityRenderer for LensMount Selection
+
+A new EntityRenderer is needed to display lens mounts with their producer:
+
+```
+entityRenderers:
+  └── "lensMountWithProducerCaption" (EntityRenderer)
+      ├── entityType: CAMERA_LENS_MOUNT
+      └── template: "{{name}} ({{producer.name}})"
+```
+
+This renders as e.g., `"X-Mount (Fuji)"`, `"M42 (ZeissIkon)"`.
+
+---
+
+## Task G7 — Post-Save Behavior and GRID Reload
+
+**Goal:** Define the lifecycle after a child entity is saved from within a stacked editor frame.
+
+### G7.1 Save Flow
+
+The save behavior depends on whether the parent entity already exists (has an ID) or is
+new (no ID). The EditorStack handles this generically — the logic is trigger-agnostic and
+works the same regardless of what element triggered the child frame.
+
+#### G7.1.1 Parent has ID (existing entity)
+
+1. User fills in the child form (e.g., selects a CameraLensMount).
+2. User clicks **Save**.
+3. `DataFormPersistenceService.save()` is called with the child DataForm's data, including
+   the context-bound values (cameraProducer ID) in the values map.
+4. On success:
+   - The child EditorFrame is **popped** from the stack.
+   - The parent frame becomes active again, with its preserved form state.
+   - The parent element identified by `sourceElementCode` is **reloaded**.
+5. On failure:
+   - The child frame stays active, error is displayed, user can fix and retry.
+
+**GRID reload mechanism (step 4 detail):**
+
+The parent form is NOT re-loaded from the backend. All parent form fields (name,
+foundationYear, etc.) remain exactly as they were — the frozen form state is simply
+restored. The **only** change is that the GRID widget re-fetches its data:
+
+```
+POST /api/view/grid-data/{dataFormCode}/{elementCode}?page=0&size=10
+Body: { "entityId": <parentEntityId>, "formState": { <preserved parent form state> } }
+```
+
+Only the GRID table widget re-renders with the updated row list. This is the same
+mechanism already used for `reloadOnChange` triggers (e.g., when changing the name field
+causes the GRID to re-fetch). The new CameraLensMount2CameraProducer row appears
+immediately in the table.
+
+#### G7.1.2 Parent has no ID (new entity — Pending Additions)
+
+1. User is creating a new CameraProducer (no ID yet).
+2. User clicks [+] on the GRID → child frame is pushed.
+3. User fills in the child form, clicks **Save**.
+4. The EditorStack detects: parent frame has no `entityId`.
+5. Instead of persisting, the child's data is stored as a **PendingChild** on the parent
+   frame:
+   ```
+   parentFrame.pendingChildren.add(PendingChild {
+     dataFormCode: "lensMountMappingForm",
+     contextBindingTarget: "cameraProducer",
+     values: { cameraLensMount: 3 },
+     sourceElementCode: "lensMountMappings",
+     pendingChildren: []
+   })
+   ```
+6. The child frame is **popped**.
+7. The parent GRID renders the pending addition alongside any DB rows, with a visual
+   indicator (e.g., italic text, "pending" badge, or muted row styling) to distinguish
+   it from persisted rows.
+8. The pending addition can be **removed** by the user (delete icon on the pending row)
+   before the parent is saved — this simply removes it from the `pendingChildren` list.
+
+**When the parent is finally saved:**
+
+All pending children are included in the save request and persisted atomically with the
+parent in one transaction. See G7.6 for the backend contract.
+
+### G7.2 Cancel Flow
+
+1. User clicks **Cancel** or a stack path ancestor node.
+2. If the child form has unsaved changes: show single confirmation dialog (per G5.7).
+3. On confirm (or if no changes): pop the child frame, no GRID reload.
+
+### G7.3 "Add Another" Option (Future Enhancement)
+
+For workflows where the user typically adds multiple entries in sequence (e.g., assigning
+several lens mounts to a producer), an optional "Save & Add Another" button could:
+1. Save the current child entity.
+2. Reset the child form to a fresh state (keeping contextBindings pre-filled).
+3. NOT pop the stack frame.
+
+This is deferred as a future enhancement — the initial implementation uses the simple
+save-then-pop flow. The `addAction` could later gain a `allowAddAnother: true` flag.
+
+### G7.4 Delete from GRID
+
+For completeness, the GRID also needs a delete action on existing rows:
+1. User clicks a delete icon/button on a GRID row.
+2. Confirmation dialog: "Remove this lens mount assignment?"
+3. On confirm: `DELETE /api/view/grid-data/{dataFormCode}/{elementCode}/{entityId}`
+   The backend resolves the entity class from the GRID's entityProvider (same resolution
+   as the data query endpoint), finds the entity by ID, and removes it.
+4. GRID reloads (same mechanism as G7.1 — re-fetch and re-render only the table widget).
+
+Delete does NOT use the EditorStack — it's a direct action on the list.
+
+### G7.5 Edit from GRID
+
+Clicking an existing GRID row (or an edit icon) pushes an EditorFrame with:
+- `dataFormCode` = the same `addAction.targetDataFormRef`
+- `entityId` = the clicked row's ID
+- `contextBindings` = same as addAction (parent fields still read-only)
+
+The edit flow reuses the same DataForm, same context bindings, same save/cancel lifecycle.
+
+### G7.6 Pending Children: Backend Contract
+
+**Goal:** When a parent entity is saved together with pending children (collected while
+the parent had no ID), everything is persisted atomically in one transaction. This
+mechanism is generic — it works for any parent/child DataForm combination, regardless
+of what element triggered the child creation.
+
+#### G7.6.1 Extended Save Request
+
+The existing save endpoint accepts an optional `pendingChildren` list:
+
+```json
+POST /api/dataform/save
+{
+  "dataFormCode": "cameraProducer",
+  "entityId": null,
+  "values": {
+    "name": "Fuji",
+    "foundationYear": "1934-01"
+  },
+  "pendingChildren": [
+    {
+      "dataFormCode": "lensMountMappingForm",
+      "contextBindingTarget": "cameraProducer",
+      "values": { "cameraLensMount": 3 },
+      "pendingChildren": []
+    },
+    {
+      "dataFormCode": "lensMountMappingForm",
+      "contextBindingTarget": "cameraProducer",
+      "values": { "cameraLensMount": 1 },
+      "pendingChildren": []
+    }
+  ]
+}
+```
+
+**Fields per pending child:**
+
+| Field | Description |
+|---|---|
+| `dataFormCode` | Which DataForm to use for persisting the child |
+| `contextBindingTarget` | Which field in the child's values receives the parent's ID |
+| `values` | The child form's field values (without the parent reference) |
+| `pendingChildren` | Recursive: grandchildren pending on this child |
+
+#### G7.6.2 Backend Processing
+
+```java
+@Transactional
+public DataFormData saveWithChildren(DataFormData data) {
+    // 1. Persist parent entity
+    DataFormData saved = save(data);
+    Long parentId = saved.getEntityId();
+
+    // 2. For each pending child: inject parent ID, persist recursively
+    for (PendingChild child : data.getPendingChildren()) {
+        DataFormData childData = new DataFormData();
+        childData.setDataFormCode(child.getDataFormCode());
+        childData.setValues(child.getValues());
+        childData.getValues().put(child.getContextBindingTarget(), parentId);
+        childData.setPendingChildren(child.getPendingChildren());
+
+        saveWithChildren(childData);  // recursive — handles grandchildren
+    }
+
+    return saved;
+}
+```
+
+**Key properties:**
+- **Atomic:** The entire tree (parent + children + grandchildren) is persisted in one
+  `@Transactional` method. If any child fails (e.g., unique constraint violation), the
+  whole transaction rolls back — nothing is saved.
+- **Recursive:** `pendingChildren` can themselves have `pendingChildren`, supporting
+  arbitrary depth. In practice, depth > 2 is rare (G5.8), but the mechanism handles it.
+- **Generic:** The method doesn't know about CameraProducers or lens mounts. It works
+  with any DataForm codes and any `contextBindingTarget` field. Adding a new parent/child
+  relationship requires only configuration (AddAction + ContextBinding), no code changes.
+- **Trigger-agnostic:** The pending children mechanism is owned by the EditorStack (G5.4),
+  not by any specific element type. Whether the child was triggered by a GRID [+] button,
+  an ENTITY_SELECT "create new" option, or any future trigger — the save contract is the
+  same.
+
+#### G7.6.3 When `pendingChildren` is Empty or Absent
+
+If the save request has no `pendingChildren` (or an empty list), the behavior is identical
+to the current `DataFormPersistenceService.save()` — no change to the existing flow for
+simple saves without children.
+
+#### G7.6.4 Frontend: GRID Display of Pending Rows
+
+When the parent has no ID, the GRID widget renders two sources:
+
+| Source | Display |
+|---|---|
+| DB rows | Normal rendering (but likely 0 rows for a new entity, since the injectable filter has no parent ID to match) |
+| Pending additions | Rendered with a visual indicator: italic text, "pending" badge, or muted row style |
+
+Pending rows support:
+- **Delete:** Remove from `pendingChildren` list (no backend call).
+- **Edit:** Re-open the child frame, pre-filled with the pending data (replaces the
+  pending entry on save).
+
+Once the parent is saved and pending children are persisted, the GRID switches to
+normal mode — all rows come from the DB, no more pending state.
+
+### G7.7 Generic Constraint Violation Error Messages
+
+**Goal:** When `saveWithChildren` fails due to a DB constraint violation, produce a
+user-friendly error message by generic means — using JPA metadata and DataForm
+configuration, without per-entity error message configuration.
+
+#### G7.7.1 Stack-Aware Error Context
+
+Every error produced by `saveWithChildren` includes the **stack context** — which
+DataForm at which level failed:
+
+```
+Error saving LensMount Assignment (child of CameraProducer):
+  A Lens Mount Assignment for Fuji with X-Mount already exists.
+```
+
+The stack context is derived from:
+- `dataFormCode` → DataForm label or entity type name
+- Parent chain → "child of {parent DataForm label}"
+
+This is fully generic — it works for any DataForm at any stack depth.
+
+#### G7.7.2 `ConstraintViolationResolver` Service
+
+A generic `@Component` that translates `DataIntegrityViolationException` into
+user-friendly messages by combining the DB exception with JPA metadata and DataForm
+configuration:
+
+```java
+@Component
+public class ConstraintViolationResolver {
+
+    private final EntityManager entityManager;
+    private final AppConfigStore appConfigStore;
+
+    /**
+     * Translates a DataIntegrityViolationException into a user-friendly message.
+     * Returns null if the exception cannot be resolved generically (fallback to raw).
+     */
+    public String resolve(DataIntegrityViolationException ex, String dataFormCode) {
+        // 1. Extract constraint name / column names from root cause
+        //    (Hibernate ConstraintViolationException → constraint name, SQL message)
+        // 2. Resolve entity class from DataForm → entity.fqcn
+        // 3. Match against JPA annotations to identify violation type
+        // 4. Map column names → entity field names → DataFormElement codes
+        // 5. Produce human-readable message
+    }
+}
+```
+
+#### G7.7.3 Resolution per Violation Type
+
+| Violation | Detection | Generic message |
+|---|---|---|
+| **Unique constraint** | `@UniqueConstraint(columnNames)` on entity class; match constraint name or column names from exception | "An entry with the same {field1} and {field2} already exists" |
+| **NOT NULL** | `@Column(nullable=false)` or `@JoinColumn(nullable=false)` | "{fieldLabel} is required" |
+| **Foreign key** (dangling reference) | FK violation in exception root cause | "The referenced {entityType} does not exist" |
+| **String too long** | `@Column(length=N)` and data truncation exception | "{fieldLabel} exceeds maximum length of {N}" |
+| **Exotic / unrecognized** | Fallback | "Save failed: {sanitized DB message}" |
+
+**Resolution chain for unique constraint (our use case):**
+
+```
+DataIntegrityViolationException
+  → root cause: ConstraintViolationException, constraint="UK_..."
+  → columns: camera_lens_mount_id, camera_producer_id
+  → JPA metamodel: CameraLensMount2CameraProducer
+      @UniqueConstraint(columnNames = {"camera_lens_mount_id", "camera_producer_id"})
+  → entity fields: cameraLensMount, cameraProducer
+  → DataForm "lensMountMappingForm" elements: "cameraProducer", "cameraLensMount"
+  → resolve current values through EntityRenderers: "Fuji", "X-Mount"
+  → message: "A Lens Mount Assignment for Fuji with X-Mount already exists"
+```
+
+#### G7.7.4 Column-to-Field Mapping
+
+The mapping from DB column names to entity field names uses the JPA metamodel:
+
+```java
+Metamodel metamodel = entityManager.getMetamodel();
+EntityType<?> entityType = metamodel.entity(entityClass);
+// Walk attributes, match @Column(name=...) or @JoinColumn(name=...) to column name
+// → returns the Java field name (e.g., "cameraProducer")
+```
+
+The mapping from entity field names to user-facing labels uses the DataForm:
+
+```java
+DataForm form = appConfigStore.getAppConfig().getDataForms().get(dataFormCode);
+DataFormElement element = form.getElements().get(fieldName);
+// element code serves as label, or resolve current value via EntityRenderer
+```
+
+If the field has an `entityRendererRef` and the current value is available from the
+failed save data, the rendered value is included in the message (e.g., "Fuji" instead
+of just "cameraProducer").
+
+#### G7.7.5 Integration with `saveWithChildren`
+
+```java
+@Transactional
+public DataFormData saveWithChildren(DataFormData data) {
+    try {
+        DataFormData saved = save(data);
+        Long parentId = saved.getEntityId();
+
+        for (PendingChild child : data.getPendingChildren()) {
+            child.getValues().put(child.getContextBindingTarget(), parentId);
+            saveWithChildren(child);
+        }
+        return saved;
+    } catch (DataIntegrityViolationException ex) {
+        String message = constraintViolationResolver.resolve(ex, data.getDataFormCode());
+        if (message == null) {
+            message = "Save failed: " + sanitize(ex.getMostSpecificCause().getMessage());
+        }
+        throw new UserFacingPersistenceException(message, ex);
+    }
+}
+```
+
+The `UserFacingPersistenceException` carries the resolved message to the REST
+controller, which returns it in the error response. The frontend displays it in the
+child form (if the stack is still active) or in the parent form (if the error occurred
+during the batched save of pending children).
+
+#### G7.7.6 No Per-Entity Configuration Required
+
+The resolver works generically because:
+- `@UniqueConstraint`, `@Column`, `@JoinColumn` are already on the entity classes
+- The JPA metamodel exposes column-to-field mappings
+- The DataForm maps fields to element codes
+- EntityRenderers provide human-readable values
+
+Adding a new entity with constraints requires **no error message configuration** — the
+resolver introspects the existing annotations and config automatically.
+
+---
+
+## Task G8 — Missing ViewNode: CameraLensMount2CameraProducer
+
+**Goal:** Add a standalone ENTITY_LIST ViewNode for CameraLensMount2CameraProducer in the
+app main tree, independent of the stacked editor feature.
+
+### G8.1 Motivation
+
+Currently there is no ViewNode for CameraLensMount2CameraProducer. While the stacked editor
+will be the primary way users create these mappings (from within a CameraProducer editor),
+a standalone list view is still needed for:
+- Administrative overview of all lens mount assignments across all producers.
+- Bulk inspection / cleanup.
+- Consistency — every entity type should have a basic CRUD view.
+
+### G8.2 Required Seed Data
+
+**EntityProvider:**
+```
+entityProviders:
+  └── "allLensMountMappings" (EntityProvider)
+      ├── entityType: CAMERA_LENS_MOUNT_2_CAMERA_PRODUCER
+      └── sortFields:
+          └── (SortField) field: "cameraProducer.name", direction: ASC
+```
+
+**DataForm:** `"lensMountMappingForm"` — same as defined in G6.6 (shared between standalone
+and stacked usage).
+
+**ViewNode:**
+```
+viewTree:
+  └── "equipment" (GROUP)
+      └── children:
+          └── "lensMountMappings" (ViewNode)
+              ├── type: ENTITY_LIST
+              ├── label: "Lens Mount Assignments"
+              ├── entityProviderRef: "allLensMountMappings"
+              ├── dataFormRef: "lensMountMappingForm"
+              └── tableColumns:
+                  ├── "col_producer"
+                  │   ├── key: "cameraProducer"
+                  │   ├── header: "Producer"
+                  │   └── entityRendererRef: "producerCaption"
+                  └── "col_mount"
+                      ├── key: "cameraLensMount"
+                      ├── header: "Lens Mount"
+                      └── entityRendererRef: "lensMountWithProducerCaption"
+```
+
+### G8.3 Implementation Note
+
+This is a straightforward seed-data addition — no new code is needed. The existing
+`ViewDataService`, `DataFormPersistenceService`, and frontend dynamic AppView already handle
+ENTITY_LIST ViewNodes generically. The only prerequisite is that `lensMountMappingForm` (G6.6)
+and `lensMountWithProducerCaption` EntityRenderer (G6.7) exist.
+
+---
+
+## Task G5–G8 Dependency Order
+
+```
+G8 (ViewNode for CameraLensMount2CameraProducer)    ← Independent, can be done first
+  └── Requires: lensMountMappingForm (G6.6), lensMountWithProducerCaption renderer (G6.7)
+
+G5 (EditorStack navigation)                          ← Foundation for GRID actions
+  └── Pure frontend: stack path tree, push/pop, state preservation
+
+G6 (AddAction + ContextBinding)                      ← Depends on G5
+  └── Generic models, seeder types, tree builder, frontend binding logic
+
+G7 (Post-save behavior + pending children)            ← Depends on G5, G6
+  └── Save/cancel/reload lifecycle, pending additions for new parent entities
+```
+
+---
+
 ## Cross-References
 
 - **Expression system** and FilterInjectable: `expressions.md` (Task E2.8 for this use case, E7.5 for FilterInjectable base class)
@@ -511,3 +1359,8 @@ disproportionate to the benefit.
 - **CameraLensMount2CameraProducer entity**: `domainEntities.md` Task D2
 - **Shared ColumnRenderer**: Used by `ViewDataService` (viewIntegration.md V2) and `GridDataService` (G1)
 - **Frontend styling**: `frontendStyling.md` — GRID panel pattern (S3), centralized theme (S1, S2)
+- **DataFormPersistenceService**: Handles save/load for all DataForms, including stacked child forms (G5–G7)
+- **EditorStack**: G5 — stacked editor navigation, stack path tree, state preservation
+- **AddAction / ContextBinding**: G6 — add/edit action configuration, context bindings (generic, first used by GRID)
+- **Post-save lifecycle**: G7 — save-pop-reload, cancel, pending children for new entities, generic error messages, future "add another"
+- **Standalone ViewNode**: G8 — CameraLensMount2CameraProducer in main tree
