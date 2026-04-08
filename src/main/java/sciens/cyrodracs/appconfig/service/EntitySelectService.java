@@ -13,6 +13,10 @@ import sciens.cyrodracs.appconfig.EntityOption;
 import sciens.cyrodracs.appconfig.EntityProvider;
 import sciens.cyrodracs.appconfig.EntityRenderer;
 
+import sciens.cyrodracs.appconfig.DataForm;
+import sciens.cyrodracs.expression.EditorEntityBuilder;
+import sciens.cyrodracs.expression.ExpressionContext;
+
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -25,16 +29,25 @@ public class EntitySelectService {
     private final AppConfigStore appConfigStore;
     private final EntityManager entityManager;
     private final FilterExecutor filterExecutor;
+    private final EditorEntityBuilder editorEntityBuilder;
 
     public EntitySelectService(AppConfigStore appConfigStore, EntityManager entityManager,
-                               FilterExecutor filterExecutor) {
+                               FilterExecutor filterExecutor, EditorEntityBuilder editorEntityBuilder) {
         this.appConfigStore = appConfigStore;
         this.entityManager = entityManager;
         this.filterExecutor = filterExecutor;
+        this.editorEntityBuilder = editorEntityBuilder;
     }
 
     @Transactional(readOnly = true)
     public List<EntityOption> getOptions(String providerCode, String rendererCode) {
+        return getOptions(providerCode, rendererCode, null, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<EntityOption> getOptions(String providerCode, String rendererCode,
+                                         String dataFormCode, Long entityId,
+                                         Map<String, String> formState) {
         AppConfig config = appConfigStore.getAppConfig();
         if (config == null) {
             throw new IllegalStateException("AppConfig not loaded");
@@ -57,7 +70,31 @@ public class EntitySelectService {
         }
 
         Class<?> entityClass = resolveClass(provider.getEntityType().getFqcn());
-        List<?> entities = filterExecutor.executeQuery(provider, entityClass);
+
+        List<?> entities;
+        if (provider.getFilterInjectableRef() != null && dataFormCode != null) {
+            DataForm dataForm = config.getDataForms().get(dataFormCode);
+            if (dataForm == null) {
+                throw new IllegalArgumentException("DataForm not found: " + dataFormCode);
+            }
+            Class<?> editorEntityClass = resolveClass(dataForm.getEntity().getFqcn());
+            Object editorEntity = null;
+            if (formState != null && !formState.isEmpty()) {
+                editorEntity = editorEntityBuilder.buildFromFormState(editorEntityClass, entityId, formState);
+            } else if (entityId != null) {
+                editorEntity = entityManager.find(editorEntityClass, entityId);
+            }
+
+            ExpressionContext context = new ExpressionContext();
+            context.put("editor", editorEntity);
+            context.put("formState", formState != null ? formState : Map.of());
+
+            FilterExecutor.PagedResult paged = filterExecutor.executePagedQuery(
+                    provider, entityClass, 0, Integer.MAX_VALUE, context);
+            entities = paged.items();
+        } else {
+            entities = filterExecutor.executeQuery(provider, entityClass);
+        }
 
         Template template = Mustache.compiler().compile(renderer.getTemplate());
 

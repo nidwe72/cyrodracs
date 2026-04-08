@@ -111,6 +111,20 @@ The frontend works exclusively with this generic structure. It has no knowledge 
 
 ---
 
+## Explicit Element Ordering (future — not yet implemented)
+
+Currently, DataFormElement rendering order depends on database auto-increment IDs (insertion order).
+This is fragile — reordering requires deleting and re-inserting elements. A dedicated `sortOrder`
+(integer) attribute on DataFormElement should control the display sequence explicitly.
+
+- `AppConfigTypeSeeder`: new `SortOrder` type on `DataFormElement` (`java.lang.Integer`)
+- `DataFormElement` model: new `int sortOrder` field (default 0)
+- `AppConfigTreeBuilder`: parse and sort elements by `sortOrder` before returning
+- Frontend: already renders elements in the order received from the backend
+- Config editor: allow drag-and-drop or manual sort order editing
+
+---
+
 ## EntityProvider (future — not yet implemented)
 
 A class that lets one provide JPA entities in a generic configurable way. Will be specified later.

@@ -19,9 +19,11 @@ public class DataFormElement implements Coded {
     private List<TableColumn> tableColumns = new ArrayList<>();
     /** GRID: add/edit action configuration with context bindings. */
     private AddAction addAction;
-    /** When true, changing this element triggers reload of dependent elements (e.g., GRIDs). */
-    private boolean reloadOnChange;
-    private Long reloadOnChangeNodeId;
+    /** List of sibling element codes whose changes trigger a reload of this element. */
+    private List<String> reloadOnChangeOf = new ArrayList<>();
+    /** When true, the field must have a non-null value on save. Default: false. */
+    private boolean mandatory;
+    private Long mandatoryNodeId;
     /** Optional: controls whether this element is visible. Null = always visible. */
     private VisibilityRule visibilityRule;
 
@@ -63,11 +65,14 @@ public class DataFormElement implements Coded {
     public AddAction getAddAction() { return addAction; }
     public void setAddAction(AddAction addAction) { this.addAction = addAction; }
 
-    public boolean isReloadOnChange() { return reloadOnChange; }
-    public void setReloadOnChange(boolean reloadOnChange) { this.reloadOnChange = reloadOnChange; }
+    public List<String> getReloadOnChangeOf() { return reloadOnChangeOf; }
+    public void setReloadOnChangeOf(List<String> reloadOnChangeOf) { this.reloadOnChangeOf = reloadOnChangeOf; }
 
-    public Long getReloadOnChangeNodeId() { return reloadOnChangeNodeId; }
-    public void setReloadOnChangeNodeId(Long reloadOnChangeNodeId) { this.reloadOnChangeNodeId = reloadOnChangeNodeId; }
+    public boolean isMandatory() { return mandatory; }
+    public void setMandatory(boolean mandatory) { this.mandatory = mandatory; }
+
+    public Long getMandatoryNodeId() { return mandatoryNodeId; }
+    public void setMandatoryNodeId(Long mandatoryNodeId) { this.mandatoryNodeId = mandatoryNodeId; }
 
     public VisibilityRule getVisibilityRule() { return visibilityRule; }
     public void setVisibilityRule(VisibilityRule visibilityRule) { this.visibilityRule = visibilityRule; }

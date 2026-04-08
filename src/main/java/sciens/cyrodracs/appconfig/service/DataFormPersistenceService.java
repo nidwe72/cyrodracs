@@ -9,7 +9,9 @@ import sciens.cyrodracs.appconfig.DataForm;
 import sciens.cyrodracs.appconfig.DataFormData;
 import sciens.cyrodracs.appconfig.DataFormElement;
 import sciens.cyrodracs.appconfig.DataFormElementType;
+import sciens.cyrodracs.appconfig.EntityProvider;
 import sciens.cyrodracs.appconfig.PendingChild;
+import sciens.cyrodracs.expression.ExpressionContext;
 
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
@@ -25,10 +27,13 @@ public class DataFormPersistenceService {
 
     private final AppConfigStore appConfigStore;
     private final EntityManager entityManager;
+    private final FilterExecutor filterExecutor;
 
-    public DataFormPersistenceService(AppConfigStore appConfigStore, EntityManager entityManager) {
+    public DataFormPersistenceService(AppConfigStore appConfigStore, EntityManager entityManager,
+                                      FilterExecutor filterExecutor) {
         this.appConfigStore = appConfigStore;
         this.entityManager = entityManager;
+        this.filterExecutor = filterExecutor;
     }
 
     @Transactional
@@ -75,6 +80,8 @@ public class DataFormPersistenceService {
         }
 
         applyValues(entity, form, data.getValues());
+        checkMandatoryFields(entity, form);
+        checkFilteredEntitySelectValues(entity, form);
         checkUniqueConstraints(entity, entityClass, data.getEntityId());
         entity = entityManager.merge(entity);
 
@@ -139,6 +146,74 @@ public class DataFormPersistenceService {
             if (element != null && element.getType() == DataFormElementType.GRID) continue;
             String bindingPath = resolveBindingPath(form, entry.getKey());
             setProperty(entity, bindingPath, entry.getValue());
+        }
+    }
+
+    /**
+     * Validates that all mandatory DataFormElements have non-null values on the entity.
+     */
+    private void checkMandatoryFields(Object entity, DataForm form) {
+        for (var entry : form.getElements().entrySet()) {
+            DataFormElement element = entry.getValue();
+            if (!element.isMandatory()) continue;
+            if (element.getType() == DataFormElementType.GRID) continue;
+
+            String bindingPath = resolveBindingPath(form, entry.getKey());
+            Object value = getProperty(entity, bindingPath);
+            if (value == null) {
+                throw new IllegalArgumentException(
+                        "Field '" + entry.getKey() + "' is mandatory and must not be empty");
+            }
+        }
+    }
+
+    /**
+     * For each ENTITY_SELECT element whose EntityProvider has a filterInjectableRef,
+     * re-runs the FilterInjectable and verifies the selected value is in the result set.
+     * Skips if the field value is null (allowed unless mandatory, which is checked separately).
+     */
+    private void checkFilteredEntitySelectValues(Object entity, DataForm form) {
+        AppConfig config = appConfigStore.getAppConfig();
+        if (config == null) return;
+
+        for (var entry : form.getElements().entrySet()) {
+            DataFormElement element = entry.getValue();
+            if (element.getType() != DataFormElementType.ENTITY_SELECT) continue;
+            if (element.getEntityProviderRef() == null) continue;
+
+            EntityProvider provider = config.getEntityProviders().get(element.getEntityProviderRef());
+            if (provider == null || provider.getFilterInjectableRef() == null) continue;
+
+            String bindingPath = resolveBindingPath(form, entry.getKey());
+            Object fieldValue = getProperty(entity, bindingPath);
+            if (fieldValue == null) continue; // null is allowed (checked by mandatory separately)
+
+            // fieldValue is either a JPA entity (from applyValues) or an ID
+            Long selectedId = (fieldValue instanceof Long) ? (Long) fieldValue : getId(fieldValue);
+
+            // Build ExpressionContext from the entity being saved
+            ExpressionContext context = new ExpressionContext();
+            context.put("editor", entity);
+            context.put("formState", Map.of());
+
+            Class<?> providerEntityClass;
+            try {
+                providerEntityClass = Class.forName(provider.getEntityType().getFqcn());
+            } catch (ClassNotFoundException e) {
+                continue;
+            }
+
+            FilterExecutor.PagedResult result = filterExecutor.executePagedQuery(
+                    provider, providerEntityClass, 0, Integer.MAX_VALUE, context);
+
+            boolean found = result.items().stream()
+                    .anyMatch(item -> selectedId.equals(getId(item)));
+
+            if (!found) {
+                throw new IllegalArgumentException(
+                        "Selected value for '" + entry.getKey()
+                        + "' is not valid for the current context");
+            }
         }
     }
 

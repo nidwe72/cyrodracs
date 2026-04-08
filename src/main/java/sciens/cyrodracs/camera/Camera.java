@@ -22,6 +22,10 @@ public class Camera {
     @JoinColumn(name = "producer_id")
     private CameraProducer producer;
 
+    @ManyToOne
+    @JoinColumn(name = "camera_lens_mount_2_camera_producer_id")
+    private CameraLensMount2CameraProducer cameraLensMount2CameraProducer;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -33,4 +37,7 @@ public class Camera {
 
     public CameraProducer getProducer() { return producer; }
     public void setProducer(CameraProducer producer) { this.producer = producer; }
+
+    public CameraLensMount2CameraProducer getCameraLensMount2CameraProducer() { return cameraLensMount2CameraProducer; }
+    public void setCameraLensMount2CameraProducer(CameraLensMount2CameraProducer cameraLensMount2CameraProducer) { this.cameraLensMount2CameraProducer = cameraLensMount2CameraProducer; }
 }

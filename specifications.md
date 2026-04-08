@@ -14,6 +14,7 @@ Overview of all specification documents and their implementation status.
 | `frontendStyling.md` | Theme, panel styling, table consistency | Done |
 | `expressions.md` | Expression system, FilterInjectable, type resolver | Done |
 | `gridElement.md` | GRID element, EditorStack, AddAction, context bindings, pending children | Done |
+| `filteredEntitySelect.md` | Filtered ENTITY_SELECT via FilterInjectable, reloadOnChangeOf, mandatory, save validation | Done |
 | `components.md` | CyrodracsTable custom widget, per-column widths, server-side sorting | Pending |
 
 ## Pending Items

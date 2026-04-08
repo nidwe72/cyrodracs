@@ -54,9 +54,42 @@ public class AppConfigMutationService {
     public void updateNode(Long id, UpdateNodeRequest request) {
         AppConfigObjectEntity entity = objectRepo.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Node not found: " + id));
-        if (request.code() != null) entity.setCode(request.code());
+
+        String oldCode = entity.getCode();
+        String newCode = request.code();
+
+        if (newCode != null) entity.setCode(newCode);
         if (request.enumValue() != null) entity.setEnumValue(request.enumValue());
         objectRepo.save(entity);
+
+        // Cascade rename: if a DataFormElement code changed, update ReloadOnChangeOf
+        // references in sibling elements within the same DataForm
+        if (newCode != null && !newCode.equals(oldCode)
+                && entity.getType() != null
+                && "DataFormElement".equals(entity.getType().getCode())
+                && entity.getParentObject() != null) {
+            cascadeReloadOnChangeOfRename(entity.getParentObject(), oldCode, newCode);
+        }
+    }
+
+    /**
+     * When a DataFormElement is renamed, updates all ReloadOnChangeOf entries
+     * in sibling elements that reference the old code.
+     */
+    private void cascadeReloadOnChangeOfRename(AppConfigObjectEntity parentForm,
+                                                String oldCode, String newCode) {
+        List<AppConfigObjectEntity> siblings = objectRepo.findByParentObject(parentForm);
+        for (AppConfigObjectEntity sibling : siblings) {
+            if (!"DataFormElement".equals(sibling.getType().getCode())) continue;
+            List<AppConfigObjectEntity> children = objectRepo.findByParentObject(sibling);
+            for (AppConfigObjectEntity child : children) {
+                if ("ReloadOnChangeOf".equals(child.getType().getCode())
+                        && oldCode.equals(child.getCode())) {
+                    child.setCode(newCode);
+                    objectRepo.save(child);
+                }
+            }
+        }
     }
 
     @Transactional

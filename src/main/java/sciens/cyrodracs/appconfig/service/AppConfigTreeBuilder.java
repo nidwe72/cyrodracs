@@ -96,6 +96,7 @@ public class AppConfigTreeBuilder {
         config.setEntityRenderers(entityRenderers);
         config.setViewTree(viewTree);
         config.setExpressions(expressions);
+        validateReloadOnChangeOfReferences(dataForms);
         return config;
     }
 
@@ -142,9 +143,11 @@ public class AppConfigTreeBuilder {
             } else if ("GridTableColumn".equals(childTypeCode)) {
                 element.getTableColumns().add(buildTableColumn(child, childrenByParentId,
                         "GridTableColumnKey", "GridTableColumnHeader", "GridTableColumnRendererRef"));
-            } else if ("ReloadOnChange".equals(childTypeCode)) {
-                element.setReloadOnChange("true".equalsIgnoreCase(child.getCode()));
-                element.setReloadOnChangeNodeId(child.getId());
+            } else if ("ReloadOnChangeOf".equals(childTypeCode)) {
+                element.getReloadOnChangeOf().add(child.getCode());
+            } else if ("Mandatory".equals(childTypeCode)) {
+                element.setMandatory("true".equalsIgnoreCase(child.getCode()));
+                element.setMandatoryNodeId(child.getId());
             } else if ("VisibilityRule".equals(childTypeCode)) {
                 element.setVisibilityRule(buildVisibilityRule(child, childrenByParentId));
             } else if ("AddAction".equals(childTypeCode)) {
@@ -393,6 +396,29 @@ public class AppConfigTreeBuilder {
         return rule;
     }
 
+
+    /**
+     * Validates that all reloadOnChangeOf entries reference existing sibling
+     * DataFormElement codes within the same DataForm.
+     */
+    private void validateReloadOnChangeOfReferences(Map<String, DataForm> dataForms) {
+        for (var formEntry : dataForms.entrySet()) {
+            DataForm form = formEntry.getValue();
+            Map<String, DataFormElement> elements = form.getElements();
+            for (var elEntry : elements.entrySet()) {
+                DataFormElement element = elEntry.getValue();
+                for (String ref : element.getReloadOnChangeOf()) {
+                    if (!elements.containsKey(ref)) {
+                        throw new IllegalStateException(
+                                "DataForm '" + formEntry.getKey()
+                                + "', element '" + elEntry.getKey()
+                                + "': reloadOnChangeOf references non-existent sibling '"
+                                + ref + "'");
+                    }
+                }
+            }
+        }
+    }
 
     private List<AppConfigObjectEntity> childrenOf(Long parentId,
                                                     Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {

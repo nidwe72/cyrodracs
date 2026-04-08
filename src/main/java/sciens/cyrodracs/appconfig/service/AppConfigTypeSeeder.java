@@ -174,8 +174,12 @@ public class AppConfigTypeSeeder {
         ensureType("ContextBindingSource", contextBindingType, "source", false, false,
                 "java.lang.String");
 
-        // ReloadOnChange on DataFormElement
-        ensureType("ReloadOnChange", dataFormElementType, "reloadOnChange", false, false,
+        // ReloadOnChangeOf on DataFormElement (collection of sibling element codes)
+        ensureType("ReloadOnChangeOf", dataFormElementType, "reloadOnChangeOf", true, false,
+                "java.lang.String");
+
+        // Mandatory on DataFormElement
+        ensureType("Mandatory", dataFormElementType, "mandatory", false, false,
                 "java.lang.Boolean");
 
         // VisibilityRule on DataFormElement
