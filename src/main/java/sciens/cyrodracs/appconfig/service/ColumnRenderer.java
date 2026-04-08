@@ -72,10 +72,12 @@ public class ColumnRenderer {
         EntityType<?> metamodel = entityManager.getMetamodel().entity(resolveEntityClass(entity));
         for (SingularAttribute<?, ?> attr : metamodel.getSingularAttributes()) {
             if ("id".equals(attr.getName())) continue;
-            if (attr.getPersistentAttributeType()
-                    != jakarta.persistence.metamodel.Attribute.PersistentAttributeType.BASIC) continue;
             Object value = getProperty(entity, attr.getName());
-            if (value != null) {
+            if (value == null) continue;
+            if (isJpaEntity(value.getClass())) {
+                // Nested relationship: build a sub-context for Mustache {{relation.field}}
+                context.put(attr.getName(), buildEntityContext(value));
+            } else {
                 context.put(attr.getName(), value.toString());
             }
         }

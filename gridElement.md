@@ -42,6 +42,7 @@ proprietary mounts (X-Mount, created by Fuji) and adopted foreign mounts (M42, c
 | `EntitySelectService` nested relationship rendering | Done (G6.8 fix) |
 | Application-level cascade delete (`ViewDataService`) | Done (SQLite fix) |
 | Application-level unique constraint check (`DataFormPersistenceService`) | Done (SQLite fix) |
+| `ColumnRenderer.buildEntityContext` nested relationship support | Done (Mustache fix) |
 
 ---
 
