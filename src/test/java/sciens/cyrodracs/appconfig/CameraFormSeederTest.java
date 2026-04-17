@@ -52,6 +52,16 @@ class CameraFormSeederTest {
         ensureChild(expr, "ExpressionDescription",
                 "Restricts CameraLensMount2CameraProducer to the Camera's selected producer");
 
+        // ── 1b. Expression: isCameraProducerSelected (BooleanInjectable) ──
+        AppConfigObjectEntity visExpr = ensureChild(root, "Expression", "isCameraProducerSelected");
+        ensureChild(visExpr, "ExpressionType", "INJECTABLE_SNIPPET", "INJECTABLE_SNIPPET");
+        ensureChild(visExpr, "InjectableBaseClass", "BOOLEAN_VALUE", "BOOLEAN_VALUE");
+        ensureChild(visExpr, "ExpressionBody",
+                "Camera c = (Camera) getInjectionContext().getEditorEntity();\n"
+              + "setResult(c != null && c.getProducer() != null);");
+        ensureChild(visExpr, "ExpressionDescription",
+                "True when a CameraProducer has been selected on the Camera");
+
         // ── 2. EntityRenderer: mountMappingCaption ──
         AppConfigObjectEntity renderer = ensureChild(root, "EntityRenderer", "mountMappingCaption");
         ensureChild(renderer, "EntityRendererEntityType",
@@ -114,6 +124,9 @@ class CameraFormSeederTest {
         ensureChild(elMount, "EntityProviderRef", "mountsForCamera");
         ensureChild(elMount, "EntityRendererRef", "mountMappingCaption");
         ensureChild(elMount, "ReloadOnChangeOf", "producer");
+        // VisibilityRule: only show when a producer is selected
+        AppConfigObjectEntity visRule = ensureChild(elMount, "VisibilityRule", "mountVisibility");
+        ensureChild(visRule, "VisibilityExpressionRef", "isCameraProducerSelected");
         // Not mandatory — fixed-lens cameras have no lens mount
 
         // ── Verify tree build ──
@@ -126,6 +139,12 @@ class CameraFormSeederTest {
         assertNotNull(exprModel, "Expression 'cameraMountFilter' should exist");
         assertEquals(ExpressionType.INJECTABLE_CLASS, exprModel.getType());
         assertEquals(InjectableBaseClass.FILTER, exprModel.getBaseClass());
+
+        // Expression: isCameraProducerSelected
+        Expression visExprModel = config.getExpressions().get("isCameraProducerSelected");
+        assertNotNull(visExprModel, "Expression 'isCameraProducerSelected' should exist");
+        assertEquals(ExpressionType.INJECTABLE_SNIPPET, visExprModel.getType());
+        assertEquals(InjectableBaseClass.BOOLEAN_VALUE, visExprModel.getBaseClass());
 
         // EntityProvider
         EntityProvider providerModel = config.getEntityProviders().get("mountsForCamera");
@@ -167,6 +186,9 @@ class CameraFormSeederTest {
         assertFalse(mountEl.isMandatory(), "lens mount should not be mandatory");
         assertEquals(List.of("producer"), mountEl.getReloadOnChangeOf(),
                 "lens mount should reload when producer changes");
+        assertNotNull(mountEl.getVisibilityRule(), "lens mount should have a visibility rule");
+        assertEquals("isCameraProducerSelected", mountEl.getVisibilityRule().getExpressionRef(),
+                "visibility rule should reference isCameraProducerSelected expression");
     }
 
     private AppConfigObjectEntity ensureChild(AppConfigObjectEntity parent, String typeCode, String code) {

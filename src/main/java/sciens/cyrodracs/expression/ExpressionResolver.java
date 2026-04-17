@@ -46,6 +46,20 @@ public class ExpressionResolver {
         return injectableExecutor.executeFilter(expr, context);
     }
 
+    /**
+     * Resolve an expression to a Boolean value.
+     * The referenced expression MUST have baseClass: BOOLEAN_VALUE.
+     */
+    public Boolean resolveBoolean(String expressionCode, ExpressionContext context) {
+        Expression expr = getExpression(expressionCode);
+        if (expr.getBaseClass() != InjectableBaseClass.BOOLEAN_VALUE) {
+            throw new IllegalArgumentException(
+                "Expression '" + expressionCode + "' has baseClass " + expr.getBaseClass()
+                + " but BOOLEAN_VALUE is required for visibilityRule");
+        }
+        return injectableExecutor.executeBoolean(expr, context);
+    }
+
     private Expression getExpression(String expressionCode) {
         Expression expr = appConfigStore.getAppConfig().getExpressions().get(expressionCode);
         if (expr == null) {

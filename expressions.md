@@ -7,8 +7,8 @@ config-tree nodes to reference dynamic runtime values. The system addresses two 
 
 1. **Server-side:** EntityProvider filters that depend on the entity currently being edited
    (e.g., "show lens mounts for *this* producer").
-2. **Client-side:** Conditional behavior driven by form state
-   (e.g., "show field B only if field A has a value").
+2. **Server-side visibility:** Conditional element visibility driven by entity/form state
+   (e.g., "show field B only if field A has a value"), evaluated via BooleanInjectable.
 
 The system is designed to be **future-proof**, **sandboxed**, and **config-tree native** — expressions
 are first-class AppConfig nodes, selectable by reference from any config node that needs dynamic values.
@@ -514,7 +514,7 @@ expression has the correct `baseClass`:
 |---|---|---|
 | `EntityProvider.filterInjectableRef` | `FILTER` | "Expression 'X' has baseClass SCALAR_VALUE but FILTER is required" |
 | `FilterNode.expressionRef` | `SCALAR_VALUE` or `LIST_VALUE` | "Expression 'X' has baseClass FILTER but SCALAR_VALUE is required" |
-| `VisibilityRule.expressionRef` | `BOOLEAN_VALUE` or `SCALAR_VALUE` | "Expression 'X' has baseClass FILTER but BOOLEAN_VALUE is required" |
+| `VisibilityRule.expressionRef` | `BOOLEAN_VALUE` | "Expression 'X' has baseClass FILTER but BOOLEAN_VALUE is required" |
 
 Validation happens:
 1. **At save time** in the admin editor (prevents saving invalid references).
@@ -522,41 +522,35 @@ Validation happens:
 
 ---
 
-## Task E3 — Client-Side Conditional Visibility
+## Task E3 — Conditional Visibility via BooleanInjectable
 
-**Goal:** Enable DataFormElements to declare visibility conditions that reference other form field
-values, evaluated client-side without a server round-trip.
+**Goal:** Enable DataFormElements to declare visibility conditions evaluated **server-side** using
+a `BooleanInjectable` expression. This follows the same Injectable pattern already established
+for `FilterInjectable` in EntityProviders — the expression receives the full `InjectionContext`
+(editor entity, formState, session data) and returns a `Boolean` that directly controls visibility.
+
+**Why server-side, not client-side?** A BooleanInjectable has access to the full entity graph,
+JPA relationships, and injection context — it can answer questions like "does this entity have a
+producer?" without the frontend needing to understand entity structure. The `reloadOnChangeOf`
+mechanism already triggers server calls on field changes, so visibility evaluation piggybacks on
+that same flow at no additional architectural cost.
 
 ### E3.1 VisibilityRule Model
+
+The VisibilityRule is simplified to a single `expressionRef` pointing to a `BOOLEAN_VALUE`
+expression. The expression itself encapsulates the full visibility logic — no separate operator
+or compareValue is needed.
 
 ```java
 public class VisibilityRule implements Coded {
     Long id;
     String code;
-    String expressionRef;           // Expression to evaluate (typically CONTEXT_PATH into formState)
+    String expressionRef;           // references an Expression with baseClass BOOLEAN_VALUE
     Long expressionRefNodeId;
-    VisibilityOperator operator;    // how to check the resolved value
-    Long operatorNodeId;
-    String compareValue;            // value to compare against (for EQUALS, NOT_EQUALS, etc.)
-    Long compareValueNodeId;
 }
 ```
 
-### E3.2 VisibilityOperator Enum
-
-```java
-public enum VisibilityOperator {
-    HAS_VALUE,          // field is non-null and non-empty
-    IS_EMPTY,           // field is null or empty
-    EQUALS,             // resolved value == compareValue
-    NOT_EQUALS,         // resolved value != compareValue
-    CONTAINS,           // resolved value contains compareValue (for strings/lists)
-    GREATER_THAN,       // numeric comparison
-    LESS_THAN           // numeric comparison
-}
-```
-
-### E3.3 DataFormElement Extension
+### E3.2 DataFormElement Extension
 
 ```java
 public class DataFormElement implements Coded {
@@ -581,56 +575,384 @@ public class DataFormElement implements Coded {
 }
 ```
 
-### E3.4 AppConfigType Rows
+### E3.3 AppConfigType Rows
 
 | code | parent | fieldName | collection | enum | javaType |
 |---|---|---|---|---|---|
 | `VisibilityRule` | `DataFormElement` | `visibilityRule` | false | false | `...appconfig.VisibilityRule` |
 | `VisibilityExpressionRef` | `VisibilityRule` | `expressionRef` | false | false | `java.lang.String` |
-| `VisibilityOperator` | `VisibilityRule` | `operator` | false | true | `...appconfig.VisibilityOperator` |
-| `VisibilityCompareValue` | `VisibilityRule` | `compareValue` | false | false | `java.lang.String` |
 | `ReloadOnChange` | `DataFormElement` | `reloadOnChange` | false | false | `java.lang.Boolean` |
 
-### E3.5 Client-Side Evaluation
+### E3.4 ExpressionResolver Extension
 
-The frontend receives VisibilityRule as part of the AppConfig tree. On every form field change:
+`ExpressionResolver` gains a `resolveBoolean()` method, analogous to the existing `resolveFilter()`:
 
-1. Build a `formState` map from current field values (key = dataBinding path, value = current input).
-2. For each DataFormElement that has a `visibilityRule`:
-   a. Resolve the `expressionRef` against `{ formState: {...} }`.
-   b. Apply the `operator` and `compareValue`.
-   c. Show or hide the element accordingly.
+```java
+/**
+ * Resolve an expression to a Boolean value.
+ * The referenced expression MUST have baseClass: BOOLEAN_VALUE.
+ */
+public Boolean resolveBoolean(String expressionCode, ExpressionContext context) {
+    Expression expr = getExpression(expressionCode);
+    if (expr.getBaseClass() != InjectableBaseClass.BOOLEAN_VALUE) {
+        throw new IllegalArgumentException(
+            "Expression '" + expressionCode + "' has baseClass " + expr.getBaseClass()
+            + " but BOOLEAN_VALUE is required for visibilityRule");
+    }
+    return injectableExecutor.executeBoolean(expr, context);
+}
+```
 
-This is purely reactive — no server call needed.
+### E3.5 Unified Evaluation Endpoint
 
-### E3.6 Example: Show shutdownYear Only if shutdownYear-Checkbox is Checked
+Visibility and options reload are evaluated together in a single server call. The existing
+`reloadOnChangeOf` mechanism declares the dependency graph; the server walks it transitively
+and returns the full state of all affected elements.
+
+#### Endpoint Contract
+
+```
+POST /api/data-form/evaluate
+
+Request:
+{
+  "dataFormCode": "camera",
+  "entityId": 42,                          // null for new entities
+  "changedElement": "producer",            // element CODE; null on initial form load
+  "formState": {                           // keys are dataBinding paths (JPA field names)
+    "producer": "5",
+    "name": "EOS R5"
+  }
+}
+
+Response:
+{
+  "elements": {
+    "cameraLensMount2CameraProducer": {
+      "visible": true,
+      "options": [                         // present only for ENTITY_SELECT elements
+        { "id": 7, "label": "EF Mount (Canon)" },
+        { "id": 12, "label": "RF Mount (Canon)" }
+      ]
+    },
+    "compatibleLenses": {
+      "visible": false,
+      "options": []
+    }
+  }
+}
+```
+
+#### Evaluation Modes
+
+| `changedElement` | Behaviour |
+|---|---|
+| `null` / omitted | **Initial load.** Evaluate ALL elements that have a `visibilityRule` and/or `entityProviderRef`. Used when the form first renders. |
+| `"producer"` | **Field change.** Walk the transitive dependency graph from `"producer"` and evaluate only the affected elements. |
+
+#### Design Rule: Data Independence from Visibility
+
+Data is always kept up-to-date regardless of visibility. When an element is evaluated, both its
+visibility AND its options are computed — even if the result is `visible: false`. This avoids
+the need to detect "became visible" transitions and trigger separate reloads. The `visible` flag
+is purely a **view concern**, not a data-flow gate.
+
+### E3.6 Dependency Graph and Topological Evaluation
+
+The `reloadOnChangeOf` declarations on DataFormElements form a **directed acyclic graph (DAG)**
+that the server uses to determine which elements need re-evaluation when a field changes.
+
+#### Graph Theory Background
+
+The structure at hand is a **DAG** (Directed Acyclic Graph) from order theory:
+
+- **Vertices** = DataFormElement codes within a DataForm
+- **Edges** = `reloadOnChangeOf` declarations (directed: from dependency → dependent)
+- **Acyclic constraint** = no circular dependencies allowed (A depends on B depends on A is
+  a configuration error, detected at config load time)
+
+When a vertex (element) changes, we need to evaluate all vertices **reachable** from it —
+its transitive closure in the graph. The order in which we evaluate them matters: if B depends
+on A and C depends on B, we must evaluate B before C, because C's BooleanInjectable may read
+entity state that was influenced by B's evaluation.
+
+This is a classic **topological sort** problem. For a DAG, a topological ordering is a linear
+sequence of all vertices such that for every directed edge (u → v), u appears before v. In our
+case, we only need the topological order of the **subgraph reachable from the changed element**,
+not the entire form.
+
+**BFS (Breadth-First Search)** naturally produces a valid topological order for DAGs when
+traversing level by level from the changed element — elements at distance 1 are evaluated
+before elements at distance 2, and so on. This is sometimes called **Kahn's algorithm** when
+combined with in-degree tracking, but for our tree-like dependency structures a simple BFS
+suffices.
+
+#### Formal Properties
+
+| Property | Implication |
+|---|---|
+| **DAG** | Guarantees a topological order exists. No infinite evaluation loops. |
+| **Transitive closure** | A single change can propagate through the full chain. One round-trip regardless of depth. |
+| **Topological order** | Elements are evaluated in dependency order — a dependent never sees stale state from its dependency. |
+| **Confluence** | If an element is reachable via multiple paths (diamond dependency), it is evaluated only once, after all its dependencies have been evaluated. |
+
+#### Why This Structure is Sufficient
+
+The dependency graph models **reactive propagation**: a change flows forward through declared
+dependencies. This covers:
+- Cascading visibility (A visible → B visible → C visible)
+- Cascading option filtering (producer → mounts → lenses)
+- Mixed cascades (visibility + options in one chain)
+
+A natural question is whether future requirements might need non-topological evaluation — e.g.,
+bidirectional dependencies or fixed-point iteration. Such patterns would indicate circular
+dependencies, which are excluded by the DAG constraint. If a future use case genuinely requires
+bidirectional reactivity (rare in form UIs), it would be modelled differently — e.g., as a
+constraint satisfaction problem. For now, the DAG/topological model matches the domain
+accurately.
+
+#### Implementation
+
+```java
+/**
+ * Resolves the transitive closure of elements affected by a change,
+ * returned in topological (BFS) order.
+ */
+public List<DataFormElement> resolveAffectedElements(DataForm form, String changedElement) {
+    // Build adjacency map: dependency → list of dependents
+    Map<String, List<DataFormElement>> dependents = new HashMap<>();
+    for (DataFormElement el : form.getElements()) {
+        if (el.getReloadOnChangeOf() != null) {
+            for (String dep : el.getReloadOnChangeOf()) {
+                dependents.computeIfAbsent(dep, k -> new ArrayList<>()).add(el);
+            }
+        }
+    }
+
+    // BFS from changedElement
+    List<DataFormElement> result = new ArrayList<>();
+    Set<String> visited = new LinkedHashSet<>();
+    Queue<String> queue = new LinkedList<>();
+    queue.add(changedElement);
+    visited.add(changedElement);
+
+    while (!queue.isEmpty()) {
+        String current = queue.poll();
+        for (DataFormElement dep : dependents.getOrDefault(current, List.of())) {
+            if (visited.add(dep.getCode())) {
+                result.add(dep);
+                queue.add(dep.getCode());
+            }
+        }
+    }
+    return result;
+}
+```
+
+For **initial form load** (`changedElement` is null), the method returns all elements that have
+a `visibilityRule` and/or an `entityProviderRef`, evaluated in declaration order (no dependency
+walk needed — everything is evaluated).
+
+#### Cycle Detection
+
+At config load time, `AppConfigTreeBuilder` validates the `reloadOnChangeOf` graph for cycles.
+A cycle is a configuration error and is logged as a warning:
+
+```
+WARN: Circular reloadOnChangeOf dependency detected: producer → mount → producer.
+      Elements involved will not be evaluated to prevent infinite loops.
+```
+
+### E3.7 Evaluation Service
+
+The `DataFormEvaluationService` orchestrates the full evaluation:
+
+```java
+@Component
+public class DataFormEvaluationService {
+
+    @Autowired ExpressionResolver expressionResolver;
+    @Autowired EntitySelectService entitySelectService;
+
+    public Map<String, ElementState> evaluate(
+            DataForm form, Long entityId,
+            String changedElement, Map<String, String> formState) {
+
+        List<DataFormElement> toEvaluate;
+        if (changedElement == null) {
+            // Initial load: evaluate all elements with visibility or provider
+            toEvaluate = form.getElements().stream()
+                .filter(el -> el.getVisibilityRule() != null
+                           || el.getEntityProviderRef() != null)
+                .toList();
+        } else {
+            toEvaluate = resolveAffectedElements(form, changedElement);
+        }
+
+        ExpressionContext ctx = buildContext(entityId, formState);
+        Map<String, ElementState> result = new LinkedHashMap<>();
+
+        for (DataFormElement el : toEvaluate) {
+            ElementState state = new ElementState();
+
+            // Visibility
+            if (el.getVisibilityRule() != null) {
+                Boolean visible = expressionResolver.resolveBoolean(
+                    el.getVisibilityRule().getExpressionRef(), ctx);
+                state.setVisible(visible != null && visible);
+            } else {
+                state.setVisible(true);  // no rule = always visible
+            }
+
+            // Options (for ENTITY_SELECT elements with a provider)
+            if (el.getEntityProviderRef() != null) {
+                state.setOptions(entitySelectService.getOptions(
+                    el.getEntityProviderRef(),
+                    el.getEntityRendererRef(),
+                    ctx));
+            }
+
+            result.put(el.getCode(), state);
+        }
+        return result;
+    }
+}
+```
+
+### E3.8 Example: Two-Level Chain (Current Requirement)
+
+Show `cameraLensMount2CameraProducer` only when a CameraProducer is selected.
 
 ```
 expressions:
-  └── "shutdownYearCheckboxValue"
-      ├── type: CONTEXT_PATH
-      └── expression: "formState.hasShutdown"
+  └── "isCameraProducerSelected"
+      ├── type: INJECTABLE_SNIPPET
+      ├── baseClass: BOOLEAN_VALUE
+      ├── expression: |
+      │     Camera c = (Camera) getInjectionContext().getEditorEntity();
+      │     setResult(c != null && c.getProducer() != null);
+      └── description: "True when a CameraProducer has been selected on the Camera"
 
 dataForms:
-  └── "cameraProducerForm"
+  └── "camera"
       └── elements:
-          ├── "hasShutdown" (DataFormElement)
-          │   ├── type: CHECKBOX
-          │   └── dataBinding: "hasShutdown"     ← virtual/transient field
-          └── "shutdownYear" (DataFormElement)
-              ├── type: DATE_PICKER__YEAR_MONTH
-              ├── dataBinding: "shutdownYear"
+          ├── "producer" (DataFormElement)
+          │   ├── type: ENTITY_SELECT
+          │   ├── dataBinding: "producer"
+          │   ├── entityProviderRef: "allCameraProducers"
+          │   ├── entityRendererRef: "producerCaption"
+          │   └── mandatory: true
+          └── "cameraLensMount2CameraProducer" (DataFormElement)
+              ├── type: ENTITY_SELECT
+              ├── dataBinding: "cameraLensMount2CameraProducer"
+              ├── entityProviderRef: "mountsForCamera"
+              ├── entityRendererRef: "mountMappingCaption"
+              ├── reloadOnChangeOf: ["producer"]
               └── visibilityRule:
-                  ├── expressionRef: "shutdownYearCheckboxValue"
-                  ├── operator: EQUALS
-                  └── compareValue: "true"
+                  └── expressionRef: "isCameraProducerSelected"
 ```
 
-### E3.7 Composable Conditions (Future)
+**Dependency graph:**
+```
+producer ──→ cameraLensMount2CameraProducer
+```
+
+**Scenario — user selects Canon as producer:**
+
+Request: `{ changedElement: "producer", formState: { "producer": "5" } }`
+
+1. BFS from "producer" → affected: `[cameraLensMount2CameraProducer]`
+2. Evaluate visibility: `isCameraProducerSelected` → `true`
+3. Evaluate options: `cameraMountFilter` → `[EF Mount (Canon), RF Mount (Canon)]`
+4. Response: `{ "cameraLensMount2CameraProducer": { visible: true, options: [...] } }`
+
+**Scenario — initial load, new Camera (no producer yet):**
+
+Request: `{ changedElement: null, formState: {} }`
+
+1. Evaluate all elements with rules → includes `cameraLensMount2CameraProducer`
+2. Evaluate visibility: `isCameraProducerSelected` → `false`
+3. Evaluate options: `cameraMountFilter` → `[]`
+4. Response: `{ "cameraLensMount2CameraProducer": { visible: false, options: [] } }`
+
+### E3.9 Example: Three-Level Chain (Illustrative)
+
+A hypothetical extension: after selecting a mount, show compatible lenses.
+
+```
+expressions:
+  ├── "isCameraProducerSelected"
+  │   ├── type: INJECTABLE_SNIPPET
+  │   ├── baseClass: BOOLEAN_VALUE
+  │   └── expression: |
+  │         Camera c = (Camera) getInjectionContext().getEditorEntity();
+  │         setResult(c != null && c.getProducer() != null);
+  │
+  └── "isMountSelected"
+      ├── type: INJECTABLE_SNIPPET
+      ├── baseClass: BOOLEAN_VALUE
+      └── expression: |
+            Camera c = (Camera) getInjectionContext().getEditorEntity();
+            setResult(c != null && c.getCameraLensMount2CameraProducer() != null);
+
+dataForms:
+  └── "camera"
+      └── elements:
+          ├── "producer"
+          │   ├── type: ENTITY_SELECT
+          │   └── (no reloadOnChangeOf — root element)
+          │
+          ├── "cameraLensMount2CameraProducer"
+          │   ├── type: ENTITY_SELECT
+          │   ├── reloadOnChangeOf: ["producer"]
+          │   ├── visibilityRule:
+          │   │   └── expressionRef: "isCameraProducerSelected"
+          │   └── entityProviderRef: "mountsForCamera"
+          │
+          └── "compatibleLenses"
+              ├── type: ENTITY_SELECT
+              ├── reloadOnChangeOf: ["cameraLensMount2CameraProducer"]
+              ├── visibilityRule:
+              │   └── expressionRef: "isMountSelected"
+              └── entityProviderRef: "lensesForMount"
+```
+
+**Dependency graph:**
+```
+producer ──→ cameraLensMount2CameraProducer ──→ compatibleLenses
+```
+
+**Scenario — user selects Canon as producer (mount not yet selected):**
+
+Request: `{ changedElement: "producer", formState: { "producer": "5" } }`
+
+1. BFS from "producer":
+   - Level 1: `cameraLensMount2CameraProducer`
+   - Level 2: `compatibleLenses`
+   - Topological order: `[cameraLensMount2CameraProducer, compatibleLenses]`
+2. Evaluate `cameraLensMount2CameraProducer`:
+   - visibility: `isCameraProducerSelected` → `true` (producer is set)
+   - options: `cameraMountFilter` → `[EF Mount, RF Mount]`
+3. Evaluate `compatibleLenses`:
+   - visibility: `isMountSelected` → `false` (no mount selected yet)
+   - options: `lensesForMount` → `[]`
+4. Response: both elements in one payload, **one round-trip**
+
+**Scenario — user then selects RF Mount:**
+
+Request: `{ changedElement: "cameraLensMount2CameraProducer", formState: { "producer": "5", "cameraLensMount2CameraProducer": "12" } }`
+
+1. BFS from "cameraLensMount2CameraProducer": `[compatibleLenses]`
+2. Evaluate `compatibleLenses`:
+   - visibility: `isMountSelected` → `true`
+   - options: `lensesForMount` → `[RF 50mm f/1.2, RF 85mm f/1.2, ...]`
+3. Response: `{ "compatibleLenses": { visible: true, options: [...] } }`
+
+### E3.10 Composable Conditions (Future)
 
 For complex visibility logic (A AND B, A OR B), VisibilityRule can be extended with a `children`
-list and a `logicType` (AND/OR), mirroring FilterNode's composable structure. This is deferred
-until a concrete use case requires it.
+list and a `logicType` (AND/OR), each child referencing its own BooleanInjectable expression.
+This mirrors FilterNode's composable structure. Deferred until a concrete use case requires it.
 
 ---
 
@@ -2666,6 +2988,130 @@ The editor follows the centralized styling from `frontendStyling.md`:
 
 ---
 
+## Task E9 — Client-Side Expression Evaluation (Future)
+
+**Goal:** Enable expressions to be evaluated **client-side** using a reactive signal graph,
+reducing server round-trips for evaluations that don't require server-side data (JPA entities,
+database access). This is a generic mechanism — any expression whose inputs are available
+client-side (formState, route params, session data) can be shifted from server to client
+evaluation.
+
+**Status:** Future task. Not part of the initial implementation. The first implementation
+(E3) evaluates all expressions server-side. This task generalises the evaluation to a
+dual-stack model where expressions are evaluated on whichever side has the required context.
+
+### E9.1 Motivation
+
+The server-side evaluation model (E3.5) works correctly but incurs a round-trip for every field
+change — even for expressions that only inspect formState values the client already has. For
+example, `isCameraProducerSelected` checks whether `producer != null`, which the client can
+answer locally without a server call.
+
+Moving eligible expressions client-side:
+- **Eliminates latency** for simple visibility checks (field non-null, checkbox checked, etc.)
+- **Reduces server load** — only expressions that need JPA/entity access remain server-side
+- **Improves UX** — visibility changes feel instantaneous
+
+### E9.2 Expression Evaluation Locality
+
+Each expression declares (or the system infers) where it can be evaluated:
+
+| Locality | Meaning | Example |
+|---|---|---|
+| `SERVER` | Requires InjectionContext with JPA entity access | `getEditorEntity(Camera.class).getProducer()` |
+| `CLIENT` | Only needs formState / route / session — evaluable in Dart | `formState["producer"] != null` |
+| `DUAL` | Has both server and client implementations | Complex expression with a simplified client equivalent |
+
+For the initial E9 implementation, the focus is on `CLIENT` expressions. The system falls back
+to `SERVER` for any expression it cannot evaluate locally.
+
+### E9.3 Client-Side Signal Graph
+
+The client-side dependency graph is implemented using the **`signals` Dart package**, which
+provides fine-grained reactive primitives with glitch-free topological propagation — the same
+mathematical properties (DAG, topological order, confluence) described in E3.6, but handled
+by the signal runtime instead of hand-written BFS.
+
+#### Core Mapping
+
+| Concept | signals API | Form equivalent |
+|---|---|---|
+| Reactive source | `signal<T>(initialValue)` | A form field's current value |
+| Derived value | `computed<T>(() => ...)` | Visibility rule result, derived field |
+| Side effect | `effect(() => ...)` | Server call for filtered options |
+
+#### Example: Camera Form with Client-Side Visibility
+
+```dart
+// Form field values as signals
+final producer = signal<int?>(null);          // selected producer ID
+final mount = signal<int?>(null);             // selected mount ID
+
+// Visibility as computed signals — evaluated locally, no server call
+final isMountVisible = computed(() => producer.value != null);
+final isLensesVisible = computed(() => mount.value != null);
+
+// Options reload as effects — these still need the server
+effect(() {
+  final p = producer.value;
+  if (p != null) {
+    fetchMountOptions(p);    // POST to server for filtered options
+  }
+});
+
+effect(() {
+  final m = mount.value;
+  if (m != null) {
+    fetchLensOptions(m);     // POST to server for filtered options
+  }
+});
+```
+
+The signal runtime guarantees:
+- When `producer` changes, `isMountVisible` recomputes **before** the effect fires
+- In a diamond dependency, downstream signals compute only once after all upstreams settle
+- No manual BFS or topological sort needed — the runtime handles propagation order
+
+### E9.4 Hybrid Evaluation Model
+
+With E9, the evaluation flow splits:
+
+```
+Field changes
+  │
+  ├── Client-side (immediate, no round-trip):
+  │     signal graph recomputes visibility for CLIENT expressions
+  │     → element shows/hides instantly
+  │
+  └── Server-side (async, via POST /api/data-form/evaluate):
+        only for elements whose expressions require SERVER locality
+        or whose options need filtered entity data
+        → response updates options + server-evaluated visibility
+```
+
+The unified endpoint from E3.5 remains available and is used for:
+- Elements with `SERVER` expressions
+- Elements with `entityProviderRef` (options always come from server)
+- Initial load (server evaluates everything, client takes over reactivity afterward)
+
+### E9.5 Relation to Existing Tasks
+
+| Task | Relation |
+|---|---|
+| **E3** (Visibility via BooleanInjectable) | E9 moves eligible E3 evaluations client-side. E3's server-side model remains the fallback. |
+| **E5** (Extensibility) | E9 is one way to extend expression evaluation — a new evaluation stack, not a new expression type. |
+| **E7** (Injectable System) | `INJECTABLE_SNIPPET` / `INJECTABLE_CLASS` remain server-only. Client expressions use a simpler model (formState path checks, simple boolean logic). |
+
+### E9.6 What E9 Does NOT Change
+
+- **Expression model** (E1) — unchanged. Expressions are still AppConfig tree nodes.
+- **Server-side evaluation** (E3.5–E3.7) — unchanged. Remains the authoritative fallback.
+- **Dependency graph structure** (E3.6) — unchanged. `reloadOnChangeOf` still declares the DAG.
+  The signal graph is the client-side implementation of the same DAG.
+- **Injectable system** (E7) — unchanged. Janino-compiled injectables remain server-side.
+
+---
+
 ## Architecture Summary
 
 ```
@@ -2749,7 +3195,10 @@ E1 (Expression model & tree)              ← Foundation
   │     │
   │     ├── E2 (Dynamic filter values)    ← Depends on E1 + E6, can use E7
   │     │     └── Enables gridElement.md G1
-  │     └── E3 (Client-side visibility)   ← Depends on E1 + E6 (client sandbox)
+  │     └── E3 (Visibility via BooleanInjectable) ← Depends on E1 + E6 + E7 (server-side)
+  │           │
+  │           └── E9 (Client-side evaluation) ← Depends on E3, shifts eligible expressions
+  │                 └── signals Dart package     to client-side signal graph (Future)
   │
   ├── E4 (Admin editor)                   ← Depends on E1, uses E6 for proposals
   │     │

@@ -23,3 +23,23 @@ Overview of all specification documents and their implementation status.
   Per-column widths, server-side sorting with pagination, compact actions column.
 - **Editor Tabs**: Concurrent editing of related entities in sibling tabs.
   Horizontal/breadth pattern complementing the vertical EditorStack. Not yet specified.
+
+## Architectural Direction
+
+- **GraphQL (Future)**: The current backend API uses REST endpoints (`/api/entity-select/options`,
+  `/api/data-form/evaluate`, `/api/data-form-data`, etc.). Future service calls should migrate to
+  **GraphQL**. GraphQL is a natural fit for the project's data model — the AppConfig tree,
+  entity graphs with @ManyToOne relationships, and the evaluate endpoint's variable response
+  shape (different elements return different state) all benefit from client-driven query
+  selection. Not yet specified — current implementation continues with REST; GraphQL migration
+  is a separate future initiative.
+
+## Tooling
+
+- **Spec Toolkit (Future)**: The project spans multiple directories (`cyrodracs` backend,
+  `cyrodracs_frontend`, `cyrodracs_db`). Currently there is no mechanism to make cross-project
+  structure discoverable at specification time — e.g., an AI assistant working on backend specs
+  may not know that the frontend project exists one level up. A lightweight spec toolkit or
+  project manifest should be introduced to declare the project topology, so that specification
+  and implementation work can reliably span all subprojects without manual hints. Not yet
+  specified.

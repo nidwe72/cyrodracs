@@ -36,6 +36,17 @@ public class InjectableExecutor {
             "Expression '" + expr.getCode() + "' is not a FilterInjectable");
     }
 
+    public Boolean executeBoolean(Expression expr, ExpressionContext rawContext) {
+        boolean isClassBody = (expr.getType() == ExpressionType.INJECTABLE_CLASS);
+        Class<?> compiled = getOrCompile(expr, isClassBody);
+        IInjectable injectable = instantiateAndExecute(compiled, rawContext);
+        if (injectable instanceof BooleanInjectable b) {
+            return b.getResult();
+        }
+        throw new IllegalStateException(
+            "Expression '" + expr.getCode() + "' is not a BooleanInjectable");
+    }
+
     public void invalidateCache() {
         compilationCache.clear();
     }

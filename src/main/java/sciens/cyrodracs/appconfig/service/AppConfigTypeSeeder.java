@@ -189,12 +189,6 @@ public class AppConfigTypeSeeder {
         ensureType("VisibilityExpressionRef", visibilityRuleType, "expressionRef", false, false,
                 "java.lang.String");
 
-        ensureType("VisibilityOperator", visibilityRuleType, "operator", false, true,
-                "sciens.cyrodracs.appconfig.VisibilityOperator");
-
-        ensureType("VisibilityCompareValue", visibilityRuleType, "compareValue", false, false,
-                "java.lang.String");
-
         // FilterNode.expressionRef
         ensureType("FilterExpressionRef", filterNodeType, "expressionRef", false, false,
                 "java.lang.String");

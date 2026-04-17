@@ -30,23 +30,4 @@ public class EntitySelectController {
         }
     }
 
-    @PostMapping("/options")
-    public ResponseEntity<List<EntityOption>> getFilteredOptions(
-            @RequestBody FilteredOptionsRequest request) {
-        try {
-            List<EntityOption> options = entitySelectService.getOptions(
-                    request.provider(), request.renderer(),
-                    request.dataFormCode(), request.entityId(), request.formState());
-            return ResponseEntity.ok(options);
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            return ResponseEntity.badRequest().build();
-        }
-    }
-
-    public record FilteredOptionsRequest(
-            String provider,
-            String renderer,
-            String dataFormCode,
-            Long entityId,
-            java.util.Map<String, String> formState) {}
 }

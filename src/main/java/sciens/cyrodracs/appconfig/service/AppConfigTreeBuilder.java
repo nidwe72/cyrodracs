@@ -23,7 +23,6 @@ import sciens.cyrodracs.appconfig.InjectableBaseClass;
 import sciens.cyrodracs.appconfig.AddAction;
 import sciens.cyrodracs.appconfig.ContextBinding;
 import sciens.cyrodracs.appconfig.VisibilityRule;
-import sciens.cyrodracs.appconfig.VisibilityOperator;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectEntity;
 import sciens.cyrodracs.appconfig.persistence.AppConfigObjectRepository;
 
@@ -385,12 +384,6 @@ public class AppConfigTreeBuilder {
             if ("VisibilityExpressionRef".equals(childTypeCode)) {
                 rule.setExpressionRef(child.getCode());
                 rule.setExpressionRefNodeId(child.getId());
-            } else if ("VisibilityOperator".equals(childTypeCode) && child.getEnumValue() != null) {
-                rule.setOperator(VisibilityOperator.valueOf(child.getEnumValue()));
-                rule.setOperatorNodeId(child.getId());
-            } else if ("VisibilityCompareValue".equals(childTypeCode)) {
-                rule.setCompareValue(child.getCode());
-                rule.setCompareValueNodeId(child.getId());
             }
         }
         return rule;
