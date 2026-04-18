@@ -15,6 +15,7 @@ Overview of all specification documents and their implementation status.
 | `expressions.md` | Expression system, FilterInjectable, type resolver | Done |
 | `gridElement.md` | GRID element, EditorStack, AddAction, context bindings, pending children | Done |
 | `filteredEntitySelect.md` | Filtered ENTITY_SELECT via FilterInjectable, reloadOnChangeOf, mandatory, save validation | Done |
+| `graphql.md` | GraphQL migration — code-first with JavaSchemaGenerator, partial data loading | Done |
 | `components.md` | CyrodracsTable custom widget, per-column widths, server-side sorting | Pending |
 
 ## Pending Items
@@ -26,13 +27,10 @@ Overview of all specification documents and their implementation status.
 
 ## Architectural Direction
 
-- **GraphQL (Future)**: The current backend API uses REST endpoints (`/api/entity-select/options`,
-  `/api/data-form/evaluate`, `/api/data-form-data`, etc.). Future service calls should migrate to
-  **GraphQL**. GraphQL is a natural fit for the project's data model — the AppConfig tree,
-  entity graphs with @ManyToOne relationships, and the evaluate endpoint's variable response
-  shape (different elements return different state) all benefit from client-driven query
-  selection. Not yet specified — current implementation continues with REST; GraphQL migration
-  is a separate future initiative.
+- **GraphQL**: Full migration from REST to GraphQL using a custom `JavaSchemaGenerator`
+  (~180 lines) that generates the GraphQL SDL at startup from Java classes via reflection.
+  Served by Spring for GraphQL with `@QueryMapping`/`@MutationMapping` controllers.
+  Pure Java — no Kotlin, no external schema library. See `graphql.md` for full specification.
 
 ## Tooling
 

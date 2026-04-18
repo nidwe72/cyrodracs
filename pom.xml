@@ -95,6 +95,12 @@
             <artifactId>javaparser-core</artifactId>
             <version>3.26.4</version>
         </dependency>
+
+        <!-- Spring for GraphQL (WebMVC — schema + resolvers + transport) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-graphql</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
