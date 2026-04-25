@@ -11,6 +11,8 @@ import sciens.cyrodracs.appconfig.AppConfig;
 import sciens.cyrodracs.appconfig.AppConfigStore;
 import sciens.cyrodracs.appconfig.EntityProvider;
 import sciens.cyrodracs.appconfig.EntityRenderer;
+import sciens.cyrodracs.appconfig.FilterNode;
+import sciens.cyrodracs.appconfig.SortField;
 import sciens.cyrodracs.appconfig.TableColumn;
 import sciens.cyrodracs.appconfig.ViewNode;
 import sciens.cyrodracs.appconfig.ViewNodeType;
@@ -45,6 +47,12 @@ public class ViewDataService {
 
     @Transactional(readOnly = true)
     public PagedResult getDataPaged(String viewNodeCode, int page, int pageSize) {
+        return getDataPaged(viewNodeCode, page, pageSize, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public PagedResult getDataPaged(String viewNodeCode, int page, int pageSize,
+                                    FilterNode userFilter, List<SortField> userSort) {
         ViewNode node = resolveViewNode(viewNodeCode);
         if (node.getType() != ViewNodeType.ENTITY_LIST) {
             throw new IllegalArgumentException("ViewNode '" + viewNodeCode + "' is not ENTITY_LIST");
@@ -61,7 +69,8 @@ public class ViewDataService {
 
         Class<?> entityClass = resolveClass(provider.getEntityType().getFqcn());
         int offset = page * pageSize;
-        FilterExecutor.PagedResult paged = filterExecutor.executePagedQuery(provider, entityClass, offset, pageSize);
+        FilterExecutor.PagedResult paged = filterExecutor.executePagedQuery(
+                provider, entityClass, offset, pageSize, userFilter, userSort);
 
         // Pre-compile renderers for columns that have them
         Map<String, Template> columnRenderers = new LinkedHashMap<>();

@@ -3,7 +3,10 @@ package sciens.cyrodracs.graphql.controller;
 import org.springframework.graphql.data.method.annotation.Argument;
 import org.springframework.graphql.data.method.annotation.QueryMapping;
 import org.springframework.stereotype.Controller;
+import sciens.cyrodracs.appconfig.FilterNode;
+import sciens.cyrodracs.appconfig.SortField;
 import sciens.cyrodracs.appconfig.service.GridDataService;
+import sciens.cyrodracs.appconfig.service.UserFilterInputs;
 import sciens.cyrodracs.appconfig.service.ViewDataService;
 
 import java.util.List;
@@ -22,12 +25,17 @@ public class ViewQueryController {
     }
 
     @QueryMapping
+    @SuppressWarnings("unchecked")
     public Map<String, Object> viewData(@Argument String viewNodeCode,
                                          @Argument Integer page,
-                                         @Argument Integer size) {
+                                         @Argument Integer size,
+                                         @Argument Map<String, Object> userFilter,
+                                         @Argument List<Map<String, Object>> userSort) {
         int p = page != null ? page : 0;
         int s = size != null ? size : 10;
-        var result = viewDataService.getDataPaged(viewNodeCode, p, s);
+        FilterNode filterNode = UserFilterInputs.toFilterNode(userFilter);
+        List<SortField> sortFields = UserFilterInputs.toSortFields(userSort);
+        var result = viewDataService.getDataPaged(viewNodeCode, p, s, filterNode, sortFields);
         return Map.of(
                 "items", result.items(),
                 "totalCount", result.totalCount(),
@@ -50,7 +58,15 @@ public class ViewQueryController {
         Map<String, String> formState = formStateEntries.stream()
                 .collect(Collectors.toMap(e -> e.get("key"), e -> e.get("value")));
 
-        var result = gridDataService.getGridData(dataFormCode, elementCode, entityId, formState, page, size);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> userFilterInput = (Map<String, Object>) input.get("userFilter");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> userSortInput = (List<Map<String, Object>>) input.get("userSort");
+        FilterNode userFilter = UserFilterInputs.toFilterNode(userFilterInput);
+        List<SortField> userSort = UserFilterInputs.toSortFields(userSortInput);
+
+        var result = gridDataService.getGridData(dataFormCode, elementCode, entityId, formState, page, size,
+                userFilter, userSort);
         return Map.of(
                 "items", result.items(),
                 "totalCount", result.totalCount(),

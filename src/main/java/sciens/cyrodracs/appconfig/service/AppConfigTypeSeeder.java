@@ -105,6 +105,21 @@ public class AppConfigTypeSeeder {
         ensureType("EntityRendererTemplate", entityRendererType, "template", false, false,
                 "java.lang.String");
 
+        // searchFields and sortFields drive picker typeahead and ordering when
+        // an EntityRenderer is referenced from a column-filter / form picker.
+        ensureType("EntityRendererSearchField", entityRendererType, "searchFields", true, false,
+                "java.lang.String");
+
+        AppConfigTypeEntity entityRendererSortFieldType = ensureType(
+                "EntityRendererSortField", entityRendererType, "sortFields", true, false,
+                "sciens.cyrodracs.appconfig.SortField");
+
+        ensureType("EntityRendererSortFieldField", entityRendererSortFieldType, "field", false, false,
+                "java.lang.String");
+
+        ensureType("EntityRendererSortFieldDirection", entityRendererSortFieldType, "direction", false, true,
+                "sciens.cyrodracs.appconfig.SortDirection");
+
         // ViewTree types
         AppConfigTypeEntity viewNodeType = ensureType("ViewNode", appConfigType, "viewTree", true, false,
                 "sciens.cyrodracs.appconfig.ViewNode");

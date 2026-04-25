@@ -1,5 +1,8 @@
 package sciens.cyrodracs.appconfig;
 
+import java.util.ArrayList;
+import java.util.List;
+
 public class EntityRenderer implements Coded {
 
     private Long id;
@@ -8,6 +11,8 @@ public class EntityRenderer implements Coded {
     private Long entityTypeNodeId;
     private String template;
     private Long templateNodeId;
+    private List<String> searchFields = new ArrayList<>();
+    private List<SortField> sortFields = new ArrayList<>();
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -28,4 +33,10 @@ public class EntityRenderer implements Coded {
 
     public Long getTemplateNodeId() { return templateNodeId; }
     public void setTemplateNodeId(Long templateNodeId) { this.templateNodeId = templateNodeId; }
+
+    public List<String> getSearchFields() { return searchFields; }
+    public void setSearchFields(List<String> searchFields) { this.searchFields = searchFields; }
+
+    public List<SortField> getSortFields() { return sortFields; }
+    public void setSortFields(List<SortField> sortFields) { this.sortFields = sortFields; }
 }

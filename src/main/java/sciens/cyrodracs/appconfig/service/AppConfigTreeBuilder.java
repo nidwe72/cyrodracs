@@ -254,16 +254,23 @@ public class AppConfigTreeBuilder {
 
     private SortField buildSortField(AppConfigObjectEntity entity,
                                       Map<Long, List<AppConfigObjectEntity>> childrenByParentId) {
+        return buildSortField(entity, childrenByParentId, "SortFieldField", "SortDirection");
+    }
+
+    private SortField buildSortField(AppConfigObjectEntity entity,
+                                      Map<Long, List<AppConfigObjectEntity>> childrenByParentId,
+                                      String fieldTypeCode,
+                                      String directionTypeCode) {
         SortField sortField = new SortField();
         sortField.setId(entity.getId());
         sortField.setCode(entity.getCode());
 
         for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
             String childTypeCode = child.getType().getCode();
-            if ("SortFieldField".equals(childTypeCode)) {
+            if (fieldTypeCode.equals(childTypeCode)) {
                 sortField.setField(child.getCode());
                 sortField.setFieldNodeId(child.getId());
-            } else if ("SortDirection".equals(childTypeCode) && child.getEnumValue() != null) {
+            } else if (directionTypeCode.equals(childTypeCode) && child.getEnumValue() != null) {
                 sortField.setDirection(SortDirection.valueOf(child.getEnumValue()));
                 sortField.setDirectionNodeId(child.getId());
             }
@@ -285,6 +292,13 @@ public class AppConfigTreeBuilder {
             } else if ("EntityRendererTemplate".equals(childTypeCode)) {
                 renderer.setTemplate(child.getCode());
                 renderer.setTemplateNodeId(child.getId());
+            } else if ("EntityRendererSearchField".equals(childTypeCode)) {
+                renderer.getSearchFields().add(child.getCode());
+            } else if ("EntityRendererSortField".equals(childTypeCode)) {
+                renderer.getSortFields().add(buildSortField(
+                        child, childrenByParentId,
+                        "EntityRendererSortFieldField",
+                        "EntityRendererSortFieldDirection"));
             }
         }
         return renderer;

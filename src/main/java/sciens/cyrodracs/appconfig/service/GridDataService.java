@@ -48,6 +48,14 @@ public class GridDataService {
     public GridPagedResult getGridData(String dataFormCode, String elementCode,
                                        Long entityId, Map<String, String> formState,
                                        int page, int pageSize) {
+        return getGridData(dataFormCode, elementCode, entityId, formState, page, pageSize, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public GridPagedResult getGridData(String dataFormCode, String elementCode,
+                                       Long entityId, Map<String, String> formState,
+                                       int page, int pageSize,
+                                       FilterNode userFilter, List<SortField> userSort) {
         AppConfig config = appConfigStore.getAppConfig();
 
         // Resolve DataForm and element
@@ -88,7 +96,7 @@ public class GridDataService {
         Class<?> gridEntityClass = resolveClass(provider.getEntityType().getFqcn());
         int offset = page * pageSize;
         FilterExecutor.PagedResult paged = filterExecutor.executePagedQuery(
-                provider, gridEntityClass, offset, pageSize, context);
+                provider, gridEntityClass, offset, pageSize, context, userFilter, userSort);
 
         // Build column renderers
         Map<String, Template> columnRenderers = new LinkedHashMap<>();

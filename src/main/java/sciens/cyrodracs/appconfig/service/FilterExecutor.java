@@ -14,6 +14,7 @@ import sciens.cyrodracs.expression.ExpressionResolver;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.YearMonth;
+import java.util.ArrayList;
 import java.util.List;
 
 import jakarta.persistence.TypedQuery;
@@ -56,14 +57,30 @@ public class FilterExecutor {
      */
     public PagedResult executePagedQuery(EntityProvider provider, Class<?> entityClass,
                                          int offset, int limit) {
+        return executePagedQuery(provider, entityClass, offset, limit, null, null);
+    }
+
+    /**
+     * Queries a page of entities, AND-merging an optional user-supplied filter
+     * onto the provider's configured filter and replacing the provider's sort
+     * fields with the user-supplied sort when non-empty. An "id ASC" tiebreaker
+     * is always appended for stable pagination.
+     */
+    public PagedResult executePagedQuery(EntityProvider provider, Class<?> entityClass,
+                                         int offset, int limit,
+                                         FilterNode userFilter, List<SortField> userSort) {
         CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+
+        FilterNode effectiveFilter = mergeFilters(provider.getFilter(), userFilter);
+        List<SortField> effectiveSort = (userSort != null && !userSort.isEmpty())
+                ? userSort : provider.getSortFields();
 
         // --- count query ---
         CriteriaQuery<Long> countQuery = cb.createQuery(Long.class);
         Root<?> countRoot = countQuery.from(entityClass);
         countQuery.select(cb.count(countRoot));
-        if (provider.getFilter() != null) {
-            Predicate countPredicate = buildPredicate(provider.getFilter(), countRoot, cb);
+        if (effectiveFilter != null) {
+            Predicate countPredicate = buildPredicate(effectiveFilter, countRoot, cb);
             if (countPredicate != null) {
                 countQuery.where(countPredicate);
             }
@@ -75,23 +92,21 @@ public class FilterExecutor {
         Root<?> root = dataQuery.from(entityClass);
         dataQuery.select(root);
 
-        if (provider.getFilter() != null) {
-            Predicate predicate = buildPredicate(provider.getFilter(), root, cb);
+        if (effectiveFilter != null) {
+            Predicate predicate = buildPredicate(effectiveFilter, root, cb);
             if (predicate != null) {
                 dataQuery.where(predicate);
             }
         }
 
-        if (!provider.getSortFields().isEmpty()) {
-            List<Order> orders = provider.getSortFields().stream()
-                    .map(sf -> {
-                        Path<?> path = walkPath(root, sf.getField());
-                        return sf.getDirection() == SortDirection.DESC
-                                ? cb.desc(path) : cb.asc(path);
-                    })
-                    .toList();
-            dataQuery.orderBy(orders);
+        List<Order> orders = new ArrayList<>();
+        for (SortField sf : effectiveSort) {
+            Path<?> path = walkPath(root, sf.getField());
+            orders.add(sf.getDirection() == SortDirection.DESC ? cb.desc(path) : cb.asc(path));
         }
+        // Stable pagination tiebreaker — never visible in the API.
+        orders.add(cb.asc(root.get("id")));
+        dataQuery.orderBy(orders);
 
         TypedQuery<Object> typedQuery = entityManager.createQuery(dataQuery);
         typedQuery.setFirstResult(offset);
@@ -106,6 +121,17 @@ public class FilterExecutor {
     public PagedResult executePagedQuery(EntityProvider provider, Class<?> entityClass,
                                          int offset, int limit,
                                          ExpressionContext context) {
+        return executePagedQuery(provider, entityClass, offset, limit, context, null, null);
+    }
+
+    /**
+     * Execute with dynamic expression context plus user-supplied filter / sort.
+     * Resolution order: static filter + injectable filter → AND-merged with userFilter.
+     */
+    public PagedResult executePagedQuery(EntityProvider provider, Class<?> entityClass,
+                                         int offset, int limit,
+                                         ExpressionContext context,
+                                         FilterNode userFilter, List<SortField> userSort) {
         FilterNode staticFilter = resolveFilterExpressions(provider.getFilter(), context);
 
         FilterNode injectableFilter = null;
@@ -116,13 +142,12 @@ public class FilterExecutor {
 
         FilterNode effectiveFilter = mergeFilters(staticFilter, injectableFilter);
 
-        // Create a temporary provider with the resolved effective filter
         EntityProvider resolvedProvider = new EntityProvider();
         resolvedProvider.setEntityType(provider.getEntityType());
         resolvedProvider.setFilter(effectiveFilter);
         resolvedProvider.setSortFields(provider.getSortFields());
 
-        return executePagedQuery(resolvedProvider, entityClass, offset, limit);
+        return executePagedQuery(resolvedProvider, entityClass, offset, limit, userFilter, userSort);
     }
 
     private FilterNode mergeFilters(FilterNode staticFilter, FilterNode injectableFilter) {
@@ -174,7 +199,7 @@ public class FilterExecutor {
         return copy;
     }
 
-    private Predicate buildPredicate(FilterNode node, Root<?> root, CriteriaBuilder cb) {
+    Predicate buildPredicate(FilterNode node, Root<?> root, CriteriaBuilder cb) {
         if (node.getType() == null) return null;
 
         if (node.getType() == FilterNodeType.COMPARISON) {
@@ -218,7 +243,9 @@ public class FilterExecutor {
             case IN -> path.in(node.getValues().stream()
                     .map(v -> convertValue(v, javaType))
                     .toList());
-            case LIKE -> cb.like(path.as(String.class), node.getValue());
+            case LIKE -> cb.like(
+                    cb.lower(path.as(String.class)),
+                    node.getValue() == null ? null : node.getValue().toLowerCase());
         };
     }
 
@@ -226,7 +253,7 @@ public class FilterExecutor {
      * Walks a dot-separated path through JPA joins.
      * E.g., "producer.name" becomes root.join("producer").get("name").
      */
-    private Path<?> walkPath(Root<?> root, String dotPath) {
+    Path<?> walkPath(Root<?> root, String dotPath) {
         String[] segments = dotPath.split("\\.");
         if (segments.length == 1) {
             return root.get(segments[0]);
@@ -240,6 +267,7 @@ public class FilterExecutor {
         return join.get(segments[segments.length - 1]);
     }
 
+    @SuppressWarnings({"unchecked", "rawtypes"})
     private Object convertValue(String value, Class<?> targetType) {
         if (value == null) return null;
         if (targetType == String.class) return value;
@@ -248,6 +276,7 @@ public class FilterExecutor {
         if (targetType == Double.class || targetType == double.class) return Double.valueOf(value);
         if (targetType == Float.class || targetType == float.class) return Float.valueOf(value);
         if (targetType == Boolean.class || targetType == boolean.class) return Boolean.valueOf(value);
+        if (targetType.isEnum()) return Enum.valueOf((Class<Enum>) targetType, value);
         if (targetType == YearMonth.class) {
             String s = value;
             if (s.length() > 7 && s.charAt(4) == '-' && s.charAt(7) == '-') {

@@ -17,7 +17,7 @@ Overview of all specification documents and their implementation status.
 | `filteredEntitySelect.md` | Filtered ENTITY_SELECT via FilterInjectable, reloadOnChangeOf, mandatory, save validation | Done |
 | `graphql.md` | GraphQL migration — code-first with JavaSchemaGenerator, partial data loading | Done |
 | `components.md` | Table component refactor — per-column widths, sticky header, two-row header (label+sort / filter), server-side sort; implementation approach undecided | Pending |
-| `columnFilters.md` | User-driven column filters and sort for ENTITY_LIST and GRID tables, User entity, advanced filter editor, SavedFilter | Pending |
+| `columnFilters.md` | User-driven column filters and sort for ENTITY_LIST and GRID tables, User entity, advanced filter editor, SavedFilter | v1 Done; v2/v3 Pending |
 | `entityTableUnification.md` | Future refactor — unify ENTITY_LIST and GRID under a single GRID abstraction | Future |
 
 ## Pending Items
@@ -29,12 +29,11 @@ Overview of all specification documents and their implementation status.
   custom widget vs. third-party packages (data_table_2, pluto_grid,
   Syncfusion, …) to be evaluated before picking. Does **not** block
   column-filter work (CF1 / CF2 ship on the interim `DataTable` first).
-- **CF1–CF6 — Column Filters v1** (`columnFilters.md`): Per-column inline filter,
-  per-column sort glyph, column metadata query, protocol extension, backend merge,
-  User entity + DEFAULT_USER seed. Built on the current `DataTable` with known
-  cosmetic limitations; re-hosts onto C1 when that lands.
 - **CF7 — Advanced Filter Editor v2** (`columnFilters.md`): Nested AND/OR editor in
   EditorStack frame, session-only named filters, LITERAL + PARENT_ENTITY bindings.
+  v1 (CF1–CF6) is shipped; see `columnFilters.md` "v1 implementation notes" for
+  intentional v1 simplifications carried into v2 (picker concurrency, EditorStack-
+  preserved filter state for GRID, admin autoproposals, wildcard escaping).
 - **CF8 — SavedFilter v3** (`columnFilters.md`): Per-user persisted filters with
   dropdown selector and CURRENT_USER binding.
 - **Entity Table Unification** (`entityTableUnification.md`): Aspirational refactor,

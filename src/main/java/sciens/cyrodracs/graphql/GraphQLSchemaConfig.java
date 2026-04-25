@@ -36,6 +36,10 @@ public class GraphQLSchemaConfig {
         gen.addType(ContextBinding.class);
         gen.addType(VisibilityRule.class);
         gen.addType(SortField.class);
+        gen.addType(ColumnFilterMeta.class);
+        gen.addType(ColumnFilterType.class);
+        gen.addType(PickerCandidate.class);
+        gen.addType(PickerCandidatesPagedResult.class);
         gen.addType(EntityOption.class);
         gen.addType(ElementState.class);
         gen.addType(BindingProposalResponse.class);
@@ -87,8 +91,11 @@ public class GraphQLSchemaConfig {
                 evaluateDataForm(input: EvaluateInput!): EvaluateResult
                 bindingProposals(entityType: String!, prefix: String): BindingProposalResponse
                 entitySelectOptions(provider: String!, renderer: String!): [EntityOption]
-                viewData(viewNodeCode: String!, page: Int, size: Int): PagedResult
+                viewData(viewNodeCode: String!, page: Int, size: Int,
+                         userFilter: FilterNodeInput, userSort: [SortFieldInput!]): PagedResult
                 gridData(input: GridDataInput!): PagedResult
+                columnFilterMetadata(scope: ColumnFilterScopeInput!): [ColumnFilterMeta!]!
+                entityRefPickerCandidates(input: PickerCandidatesInput!): PickerCandidatesPagedResult!
                 cameras: [Camera]
                 cameraProducers: [CameraProducer]
                 cameraLensMounts: [CameraLensMount]
@@ -128,6 +135,32 @@ public class GraphQLSchemaConfig {
                 elementCode: String!
                 entityId: Int!
                 formState: [MapEntryInput!]
+                page: Int
+                size: Int
+                userFilter: FilterNodeInput
+                userSort: [SortFieldInput!]
+            }
+            input FilterNodeInput {
+                type: FilterNodeType!
+                field: String
+                operator: FilterOperator
+                value: String
+                values: [String!]
+                children: [FilterNodeInput!]
+            }
+            input SortFieldInput {
+                field: String!
+                direction: SortDirection!
+            }
+            input ColumnFilterScopeInput {
+                viewNodeCode: String
+                dataFormCode: String
+                elementCode: String
+            }
+            input PickerCandidatesInput {
+                scope: ColumnFilterScopeInput!
+                columnKey: String!
+                term: String
                 page: Int
                 size: Int
             }

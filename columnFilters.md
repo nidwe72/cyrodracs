@@ -28,18 +28,57 @@ on the `chinonCameras` node (if activated) would have been ANDed on top.
 
 ## Implementation Status
 
+**v1 (CF1–CF6) is shipped.** The motivating example — *"Fuji cameras
+released after 2020"* — works end-to-end on both ENTITY_LIST and GRID
+surfaces. v2 (advanced filter editor) and v3 (saved filters per user)
+remain pending.
+
 | Component | Phase | Status |
 |---|---|---|
-| Per-column inline filter widget (CF1) | v1 | Pending |
-| Per-column sort glyph (CF2) | v1 | Pending |
-| `columnFilterMetadata` GraphQL query (CF3) | v1 | Pending |
-| Picker base + projection (CF3.4 / CF3.4.1) | v1 | Pending |
-| `EntityRenderer.searchFields` + `.sortFields` (CF3.5) | v1 | Pending |
-| `viewData` / GRID data query — `userFilter` + `userSort` args (CF4) | v1 | Pending |
-| Filter + sort merge in backend services (CF5) | v1 | Pending |
-| `User` JPA entity + `DEFAULT_USER` seed (CF6) | v1 | Pending |
+| Per-column inline filter widget (CF1) | v1 | Done |
+| Per-column sort glyph (CF2) | v1 | Done |
+| `columnFilterMetadata` GraphQL query (CF3) | v1 | Done |
+| Picker base + projection (CF3.4 / CF3.4.1) | v1 | Done |
+| `EntityRenderer.searchFields` + `.sortFields` (CF3.5) | v1 | Done |
+| `viewData` / GRID data query — `userFilter` + `userSort` args (CF4) | v1 | Done |
+| Filter + sort merge in backend services (CF5) | v1 | Done |
+| `User` JPA entity + `DEFAULT_USER` seed (CF6) | v1 | Done |
 | Advanced filter editor — EditorStack frame (CF7) | v2 | Pending |
 | `SavedFilter` entity + per-user persistence (CF8) | v3 | Pending |
+
+### v1 implementation notes
+
+The implementation matches the spec with a few intentional simplifications,
+each documented for the v2 / future passes:
+
+- **Picker concurrency (CF1.9)** is realised via Flutter focus model
+  (single focused field at a time naturally dismisses the previously
+  open picker), not via an explicit cross-widget single-open notifier.
+  Behaviour matches the spec; the explicit manager would be a refactor
+  if a more aggressive guarantee is needed (e.g., simultaneous overlay
+  in a non-focus context).
+- **Wildcard escaping in user input is not done.** Typing a literal `%`
+  or `_` in a STRING filter or ENTITY_REF picker term is interpreted as
+  a SQL wildcard. Acceptable v1 limitation — fixing requires either
+  frontend escaping or a backend `ESCAPE` clause; deferred.
+- **Sticky header on the interim `DataTable`** is not enforced (CF1.1
+  acknowledged this). Filter inputs scroll out of view on long lists.
+  Migrates with `components.md` C1.
+- **GRID filter / sort state** lives in the `_GridFieldState` widget
+  state, not on `EditorFrame`. A child-editor push followed by pop
+  resets filter/sort on the parent's GRID. CF1.3 EditorStack
+  preservation is therefore not realised in v1; it is in scope for the
+  same future pass that migrates filter state to `EditorFrame`
+  alongside `formState`.
+- **Admin-editor autoproposals (CF3.5.3)** for `searchFields` /
+  `sortFields` config entries are deferred. The new types are
+  reachable via the existing add-node mutation, so admins can configure
+  them by typing attribute paths manually. Wiring `DataBindingService`
+  proposals into the editor for these specific types is a UX polish
+  task, not on the v1 critical path.
+- **Last-wins fetch dedup** is implemented on both surfaces (sequence
+  number per fetch); discarded responses from earlier in-flight queries
+  are silently dropped per CF1.4.
 
 ---
 
