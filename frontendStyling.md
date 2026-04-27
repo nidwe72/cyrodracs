@@ -90,39 +90,28 @@ ThemeData(
 )
 ```
 
-### S1.2 DataTableThemeData
+### S1.2 Table styling — `TrinaGrid` (post-C1)
 
-Configure table appearance globally so that all `DataTable` widgets (GRID elements, ENTITY_LIST
-tables) inherit consistent styling without per-widget code:
+The project's tables (ENTITY_LIST, GRID DataFormElement) render via
+`TrinaGrid` from the `trina_grid` package since the C1 refactor (see
+`components.md` C1, shipped 2026-04-28). Their styling is centralised
+in `lib/widgets/grid/trina_grid_theme.dart`'s
+`trinaGridConfigForApp(...)` helper, which builds a
+`TrinaGridConfiguration` from `AppTheme` constants:
 
-```dart
-dataTableTheme: DataTableThemeData(
-  headingRowColor: WidgetStateProperty.all(Colors.grey.shade100),
-  headingTextStyle: const TextStyle(
-    fontWeight: FontWeight.w600,
-    color: Colors.black87,
-    fontSize: 13,
-  ),
-  dataRowColor: WidgetStateProperty.resolveWith<Color?>((states) {
-    // Alternating row colors for striping
-    // Note: DataTable does not natively pass row index to WidgetStateProperty,
-    // so striping is applied per-widget via DataRow.color (see S3.3, S4).
-    return null;
-  }),
-  dataTextStyle: const TextStyle(fontSize: 13),
-  columnSpacing: 24,
-  horizontalMargin: 16,
-  decoration: const BoxDecoration(
-    border: Border.fromBorderSide(BorderSide(color: Color(0xFFDEE2E6))),
-  ),
-),
-```
+- Heights, font, border colour, header text style.
+- Striping via `evenRowColor: AppTheme.tableStripeColor` /
+  `oddRowColor: Colors.white` (or the inverse — the helper carries
+  the project's chosen orientation).
+- Column auto-size to fill the table (`autoSizeMode: scale`).
+- Resize redistribution between neighbours (`resizeMode: pushAndPull`).
+- Suppressed scrollbar gutter (`columnShowScrollWidth: false`) and
+  zero `gridPadding` / `gridBorderWidth` so the table fills its Card
+  edge to edge.
 
-**Note on row striping:** Flutter's `DataTableThemeData.dataRowColor` receives `WidgetStateProperty`
-but does not provide a row index, so alternating colors cannot be set purely in the theme.
-Instead, row striping is applied via `DataRow.color` at the widget level, using a color constant
-from `AppTheme` (see S2.1). This is the standard Flutter pattern — the theme sets the base
-appearance, individual widgets apply index-based striping.
+A `DataTableThemeData` block also remains in `main.dart`'s
+`ThemeData` for legacy reasons (Material 3 / pre-existing widgets);
+the project no longer renders Material `DataTable` directly.
 
 ---
 
@@ -172,14 +161,6 @@ abstract final class AppTheme {
 
   // ── Borders ──
   static const BorderSide panelBorder = BorderSide(color: Color(0xFFDEE2E6));
-
-  /// Returns a DataRow.color that applies striping based on row index.
-  static WidgetStateProperty<Color?>? stripeColor(int index) {
-    if (index.isOdd) {
-      return WidgetStateProperty.all(tableStripeColor);
-    }
-    return null;
-  }
 }
 ```
 
@@ -195,19 +176,19 @@ Padding(padding: const EdgeInsets.all(AppTheme.spacingMd), ...)
 
 // Icon sizing
 Icon(Icons.refresh, size: AppTheme.iconSize)
-
-// Row striping (in DataTable rows)
-DataRow(
-  color: AppTheme.stripeColor(index),
-  cells: [...],
-)
 ```
+
+Table-row striping for `TrinaGrid` surfaces lives in
+`lib/widgets/grid/trina_grid_theme.dart`'s
+`trinaGridConfigForApp(...)` helper, which maps `tableStripeColor`
+onto `TrinaGridStyleConfig.evenRowColor` / `oddRowColor`. See
+`components.md` C1.
 
 ### S2.3 Scope
 
-`AppTheme` is strictly for **values** — no widget builders, no state, no logic beyond
-the `stripeColor` convenience. If a pattern grows complex enough to warrant a widget,
-it becomes a reusable widget in `lib/theme/` or `lib/widgets/`, not a method on `AppTheme`.
+`AppTheme` is strictly for **values** — no widget builders, no state, no logic.
+Reusable patterns that need composition (e.g. the `TrinaGrid` configuration
+builder) live in `lib/widgets/`, not on `AppTheme`.
 
 ---
 
@@ -224,38 +205,30 @@ Card (sharp corners, thin border via CardTheme)
 │   ├── Title text (AppTheme.panelHeaderTitle)
 │   ├── Count badge ("(2)")
 │   ├── Spacer
-│   └── Refresh icon button
-├── Divider
-└── Table body
-    ├── DataTable
-    │   ├── Column headers (styled via DataTableTheme + AppTheme.tableHeaderStyle)
-    │   └── Data rows (striped via AppTheme.stripeColor)
-    └── Pagination bar (if totalPages > 1)
+│   └── Toolbar icons (Add, Clear filters, Reload)
+├── 1-px separator (Container with the form-input border colour, lightened ~30%)
+├── TrinaGrid (column headers + data rows; striped per S3.3)
+└── Pagination bar (panelHeaderBackground tint; right-aligned)
 ```
 
 ### S3.2 Panel Header
 
 The header is a `Container` with `AppTheme.panelHeaderBackground` and
 `AppTheme.panelHeaderPadding`, containing the title in `AppTheme.panelHeaderTitle`.
-A `Divider` separates it from the table body. This pattern replaces the current approach
-of a `Text` title that looks indistinguishable from a data row.
+A 1-px `Container` separator (using a 30 %-lightened version of the
+form-input border colour, derived per surface) divides it from the
+column-header row. This pattern replaces the prior `Text` title that
+looked indistinguishable from a data row.
 
 ### S3.3 Row Striping
 
-Applied per-row using `DataRow.color` and `AppTheme.stripeColor(index)`:
-
-```dart
-rows: _rows.asMap().entries.map((entry) {
-  final index = entry.key;
-  final row = entry.value;
-  return DataRow(
-    color: AppTheme.stripeColor(index),
-    cells: widget.tableColumns
-        .map((c) => DataCell(Text('${row[c.key] ?? ''}')))
-        .toList(),
-  );
-}).toList(),
-```
+Applied via `TrinaGridStyleConfig.evenRowColor` / `oddRowColor` in
+`trinaGridConfigForApp(...)` (see `lib/widgets/grid/trina_grid_theme.dart`).
+For the GRID surface specifically, when `rowColorCallback` is engaged
+for pending-row tinting, that callback re-implements the alternation
+(see `components.md` C1.11 — `rowColorCallback` overrides the style-
+config zebra). The `tableStripeColor` constant on `AppTheme` is the
+underlying hue.
 
 ### S3.4 Pagination Alignment
 
@@ -276,13 +249,17 @@ keeping the title visible regardless of state.
 
 ### S4.1 Changes
 
-The `_buildEntityTable()` method in `app_view.dart` applies:
-- Row striping via `AppTheme.stripeColor(index)` on each `DataRow`.
-- Icon sizing via `AppTheme.iconSize` on action buttons.
-- Spacing via `AppTheme` constants.
+The `_buildEntityTable()` method in `app_view.dart` renders a
+`TrinaGrid` (post-C1) configured via `trinaGridConfigForApp(...)`
+which carries:
+- Row striping via `evenRowColor` / `oddRowColor` from
+  `AppTheme.tableStripeColor`.
+- Header text via `AppTheme.tableHeaderStyle`.
+- Borders via `Colors.grey.shade200`.
 
-The column headers and overall table decoration are inherited from the global
-`DataTableThemeData` (S1.2), so no per-widget header styling is needed.
+Per-widget styling is limited to icon sizing (`AppTheme.iconSize`)
+and spacing (`AppTheme.spacingMd` etc.) on toolbar / cell action
+icons. The grid widget itself is themed centrally, not per-call-site.
 
 ### S4.2 Header Bar
 

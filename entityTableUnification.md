@@ -285,5 +285,8 @@ Before starting the refactor, record answers to:
   (G4). The target model is essentially this spec applied universally.
 - `columnFilters.md` — must remain surface-agnostic (see above).
 - `appConfig.md` — AppConfigType multi-parent constraint (U1.1).
-- `components.md` — CyrodracsTable widget (Pending). Unification simplifies
-  its adoption: one caller, one integration point.
+- `components.md` — `trina_grid` adoption shipped (C1, 2026-04-28).
+  Unification simplifies things further: today's two adapter call
+  sites (`app_view.dart` ENTITY_LIST and `form_renderer_view.dart`
+  GRID) collapse to one, with one host integration point for the
+  `TrinaGrid` adapter and the C1.10 carve-outs.

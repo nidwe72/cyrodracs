@@ -61,9 +61,10 @@ each documented for the v2 / future passes:
   or `_` in a STRING filter or ENTITY_REF picker term is interpreted as
   a SQL wildcard. Acceptable v1 limitation — fixing requires either
   frontend escaping or a backend `ESCAPE` clause; deferred.
-- **Sticky header on the interim `DataTable`** is not enforced (CF1.1
-  acknowledged this). Filter inputs scroll out of view on long lists.
-  Migrates with `components.md` C1.
+- **Sticky header.** ✓ Resolved by the C1 migration to `TrinaGrid`,
+  which provides native sticky header (column-titles row stays
+  pinned during vertical row scroll). Was acknowledged as a v1
+  limitation while CF1 sat on Material `DataTable`.
 - **GRID filter / sort state** lives in the `_GridFieldState` widget
   state, not on `EditorFrame`. A child-editor push followed by pop
   resets filter/sort on the parent's GRID. CF1.3 EditorStack
@@ -79,6 +80,31 @@ each documented for the v2 / future passes:
 - **Last-wins fetch dedup** is implemented on both surfaces (sequence
   number per fetch); discarded responses from earlier in-flight queries
   are silently dropped per CF1.4.
+
+### v1 defects (resolved)
+
+Both items below were tightened in the spec and the corresponding
+implementation work has shipped. Kept here for historical context.
+
+- **CF1.1 — Filter input width.** ✓ Resolved by the C1 table-component
+  refactor (`components.md` C1) — adoption of `trina_grid`.
+  `DataColumn2`-equivalent flex widths (`ColumnSize.S/M/L` →
+  `TrinaColumn.width` + `autoSizeMode: scale`) distribute the table
+  width across data columns; the filter input lives in
+  `TrinaColumn.titleRenderer` and inherits the column's resolved
+  width via `crossAxisAlignment: stretch`. The interim `IntrinsicWidth`
+  crutch on the prior `DataTable` host was removed during the
+  migration. CF1 filter widgets themselves are reused verbatim;
+  `trina_grid`'s built-in filter UI is bypassed per `components.md`
+  C1.10.
+- **CF1.10 — Picker keyboard navigation.** ✓ Implemented prior to
+  the C1 migration and survived intact through it. The entity-ref
+  picker (`EntityRefFilterInput`) wraps its `TextField` in
+  `CallbackShortcuts` binding `Arrow Up`/`Down`/`Home`/`End`/`Enter`/
+  `Escape`; the candidate list scrolls the highlighted item into
+  view; `Tab` is left to default focus traversal so the existing
+  focus-loss listener closes the overlay. Enum filter delegates to
+  Flutter's `DropdownButton` which has built-in keyboard nav.
 
 ---
 
@@ -151,21 +177,27 @@ The column header becomes two rows per column:
 - **No popover.** The input lives inline in the header.
 - **Per-column alignment.** Each column's filter is aligned with its column
   width; there is no separate filter row spanning the whole table.
-- The filter row belongs to the header region. Sticky-header behavior is
-  **best-effort on the interim `DataTable`** (see below) and a hard
-  requirement for the future table widget (see `components.md`).
+- **Full-width input.** The filter input stretches to fill the column's
+  available content width (minus standard cell padding). Range pairs
+  (number / date `from` | `to`) share the column width equally with a
+  small gap between them. The picker / enum dropdown's *trigger* widget
+  also fills the column width; its floating list (CF1.9) is sized
+  independently. A noticeably-thin input in a wide column is a defect,
+  not a width-distribution artifact.
+- The filter row belongs to the header region. Sticky-header behavior
+  is provided natively by `TrinaGrid` (`components.md` C1.7).
 
-**Known `DataTable` limitations (interim).** Until the table-component
-refactor lands, filter inputs sit on Flutter's `DataTable`, which:
-- Distributes column widths equally, so a filter input in a narrow column
-  (e.g. an actions column) may look oversized or clipped.
-- Has no native two-row header cell; the filter row is realized by placing
-  the input inside the header's cell content alongside the label.
-- Has no native sticky header on a scrolling table.
-
-These are accepted cosmetic / UX costs for v1. They migrate away when
-`components.md`'s table refactor lands; CF1's behavior and state model do
-not change with that migration.
+**Historical: Material `DataTable` interim host.** During CF1's first
+release the filter widgets sat on Flutter's Material `DataTable`,
+which sized columns to `IntrinsicColumnWidth` with no flex
+distribution, had no native two-row header cell, and no native
+sticky header. The CF1 widgets used an `IntrinsicWidth` + `stretch`
+crutch in `sortableDataColumn` to keep the filter input filling the
+column-intrinsic width. Those constraints are gone — the C1 refactor
+(`components.md` C1) shipped 2026-04-28 and replaced the host with
+`TrinaGrid`. Flex distribution, native sticky header, and a clean
+two-row header (label + filter input) all come from `trina_grid`
+without behaviour or state-model changes to CF1.
 
 ### CF1.2 Filter Inputs — Smart Inputs by Type
 
@@ -280,6 +312,37 @@ Rationale: stacked open dropdowns on a narrow header row are visually
 noisy and hard to hit; constraining to one at a time matches how native
 select widgets behave. Modal would be heavyweight for a column-header
 dropdown and would block scrolling the table while the picker is open.
+
+### CF1.10 Picker Keyboard Interaction
+
+The entity-ref picker and the enum dropdown are fully keyboard-operable.
+Once the picker is open (entity-ref: typeahead field focused, list shown
+with at least one candidate; enum: dropdown opened from its trigger):
+
+| Key | Behavior |
+|---|---|
+| `Arrow Down` | Move highlight to the next item. If no item is highlighted yet, highlight the first. On a closed enum dropdown, opens the list and highlights the current value (or the first item). |
+| `Arrow Up` | Move highlight to the previous item. Wraps from first to last (or stops at first — implementation choice, but consistent with native dropdowns). |
+| `Home` / `End` | Jump to the first / last item in the list (when the list has focus). |
+| `Enter` | Select the highlighted item, close the picker, apply the filter. If no item is highlighted but the list has exactly one match, select it; otherwise no-op. |
+| `Escape` | Close the picker without selecting. The previously applied filter value (if any) is preserved; the typeahead text in the input is reset to the applied value's display label, or cleared if there is no applied value. |
+| `Tab` | Close the picker without selecting; move focus to the next focusable field in the header (typically the next column's filter). `Shift+Tab` moves to the previous focusable field. |
+
+**Highlight state.** The keyboard-highlighted item is visually distinct
+from the mouse-hovered item. When the user moves the mouse over the list
+after navigating with the keyboard, the highlight follows the mouse;
+when the user presses an arrow key after hovering, the highlight returns
+to keyboard control. Only one item is "highlighted" at a time, regardless
+of input source.
+
+**Equivalence.** Any item reachable via mouse click MUST be reachable via
+`Arrow` keys + `Enter`. No item is mouse-only.
+
+**Typeahead vs. navigation (entity-ref picker).** Typing characters in the
+typeahead field updates the candidate list (CF1.4 debounced). `Arrow Down`
+shifts focus from the text field into the list and highlights the first
+result; pressing a printable character returns focus to the text field
+and resumes typing.
 
 ---
 
@@ -1119,11 +1182,11 @@ protocol round-trip.
 - **ContextBinding**: `gridElement.md` G6. Binding enum reused and extended
   by CF7 (`LITERAL`, `PARENT_ENTITY`) and CF8 (`CURRENT_USER`, `TODAY`,
   `NOW`).
-- **Table component refactor**: `components.md` C1. Pending, approach
-  undecided (third-party vs. proprietary). CF1 and CF2 ship first on the
-  interim `DataTable`; their filter-input and sort-glyph widgets migrate
-  into whichever replacement lands, without protocol or state-model
-  changes.
+- **Table component refactor**: `components.md` C1 — done
+  (2026-04-28). Both ENTITY_LIST and GRID now render via `TrinaGrid`.
+  CF1 / CF2 widgets re-hosted into `TrinaColumn.titleRenderer`
+  unchanged at the protocol and state-model level; `trina_grid`'s
+  built-in filter UI is bypassed per the C1.10 integration boundary.
 - **Entity table unification**: `entityTableUnification.md`. Column filters
   must treat ENTITY_LIST and GRID identically; unification work must not
   require column-filter changes.

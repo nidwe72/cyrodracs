@@ -16,19 +16,12 @@ Overview of all specification documents and their implementation status.
 | `gridElement.md` | GRID element, EditorStack, AddAction, context bindings, pending children | Done |
 | `filteredEntitySelect.md` | Filtered ENTITY_SELECT via FilterInjectable, reloadOnChangeOf, mandatory, save validation | Done |
 | `graphql.md` | GraphQL migration — code-first with JavaSchemaGenerator, partial data loading | Done |
-| `components.md` | Table component refactor — per-column widths, sticky header, two-row header (label+sort / filter), server-side sort; implementation approach undecided | Pending |
+| `components.md` | Table component refactor — per-column widths, sticky header, two-row header (label+sort / filter), server-side sort; adopted `trina_grid` | Done |
 | `columnFilters.md` | User-driven column filters and sort for ENTITY_LIST and GRID tables, User entity, advanced filter editor, SavedFilter | v1 Done; v2/v3 Pending |
 | `entityTableUnification.md` | Future refactor — unify ENTITY_LIST and GRID under a single GRID abstraction | Future |
 
 ## Pending Items
 
-- **C1 — Table Component Refactor** (`components.md`): Replacement for
-  Flutter's `DataTable` with per-column widths, sticky header, two-row
-  header (label+sort / filter input), server-side sort, keyboard /
-  accessibility. **Implementation approach undecided** — pure-Flutter
-  custom widget vs. third-party packages (data_table_2, pluto_grid,
-  Syncfusion, …) to be evaluated before picking. Does **not** block
-  column-filter work (CF1 / CF2 ship on the interim `DataTable` first).
 - **CF7 — Advanced Filter Editor v2** (`columnFilters.md`): Nested AND/OR editor in
   EditorStack frame, session-only named filters, LITERAL + PARENT_ENTITY bindings.
   v1 (CF1–CF6) is shipped; see `columnFilters.md` "v1 implementation notes" for
@@ -80,9 +73,9 @@ Overview of all specification documents and their implementation status.
     timing: on every picker-open / typeahead query, with current
     `formState` as injection context. Not cached; microsecond-scale
     cost.
-  - **Host widget:** the table component from `components.md` C1, once
-    chosen, is the natural renderer. Column filter UI from CF1 applies
-    directly.
+  - **Host widget:** `TrinaGrid` (per `components.md` C1, shipped
+    2026-04-28) is the natural renderer. Column filter UI from CF1
+    applies directly via the same `buildTrinaColumn` adapter.
   - **Relationship to `entityTableUnification.md`:** compatible and
     reinforcing. If unification lands first, the selectable GRID
     capability applies uniformly to both ENTITY_LIST-style and
