@@ -226,8 +226,8 @@ Applied via `TrinaGridStyleConfig.evenRowColor` / `oddRowColor` in
 `trinaGridConfigForApp(...)` (see `lib/widgets/grid/trina_grid_theme.dart`).
 For the GRID surface specifically, when `rowColorCallback` is engaged
 for pending-row tinting, that callback re-implements the alternation
-(see `components.md` C1.11 — `rowColorCallback` overrides the style-
-config zebra). The `tableStripeColor` constant on `AppTheme` is the
+(setting `rowColorCallback` overrides Trina's `evenRowColor` /
+`oddRowColor`). The `tableStripeColor` constant on `AppTheme` is the
 underlying hue.
 
 ### S3.4 Pagination Alignment

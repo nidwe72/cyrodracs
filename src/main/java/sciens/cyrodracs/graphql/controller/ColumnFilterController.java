@@ -4,9 +4,11 @@ import org.springframework.graphql.data.method.annotation.Argument;
 import org.springframework.graphql.data.method.annotation.QueryMapping;
 import org.springframework.stereotype.Controller;
 import sciens.cyrodracs.appconfig.ColumnFilterMeta;
+import sciens.cyrodracs.appconfig.FilterNode;
 import sciens.cyrodracs.appconfig.PickerCandidatesPagedResult;
 import sciens.cyrodracs.appconfig.service.ColumnFilterMetadataService;
 import sciens.cyrodracs.appconfig.service.PickerCandidatesService;
+import sciens.cyrodracs.appconfig.service.UserFilterInputs;
 
 import java.util.List;
 import java.util.Map;
@@ -51,10 +53,19 @@ public class ColumnFilterController {
         String term = (String) input.get("term");
         Integer page = (Integer) input.get("page");
         Integer size = (Integer) input.get("size");
+
+        // CF3.4.3 protocol additions — currently plumbed through, consumed in Phase 3.
+        Map<String, Object> userFilterInput = (Map<String, Object>) input.get("userFilter");
+        FilterNode userFilter = UserFilterInputs.toFilterNode(userFilterInput);
+        Number editorEntityIdRaw = (Number) input.get("editorEntityId");
+        Long editorEntityId = editorEntityIdRaw == null ? null : editorEntityIdRaw.longValue();
+
         return pickerService.getCandidates(
                 viewNodeCode, dataFormCode, elementCode,
                 columnKey, term,
                 page != null ? page : 0,
-                size != null ? size : 20);
+                size != null ? size : 20,
+                userFilter,
+                editorEntityId);
     }
 }

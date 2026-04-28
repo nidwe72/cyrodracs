@@ -63,18 +63,18 @@ class GridDataEndToEndTest {
 
     @Test
     @Transactional(readOnly = true)
-    void gridReturnsAllForCreateNewMode() {
+    void gridReturnsZeroRowsInCreateNewMode() {
         appConfigStore.reload();
-        // No entityId = "create new" mode, injectable returns null filter → show all
-        // But since we pass null entityId, EditorEntityBuilder won't build an entity
-        // and the injectable gets null → setResult(null) → no filter
+        // Brand-new (transient) producer — not yet persisted, so no
+        // CameraLensMount2CameraProducer rows can possibly reference it.
+        // producerMountFilter detects null editor / null id and emits a
+        // match-nothing predicate (`cameraProducer.id IS NULL`).
         GridDataService.GridPagedResult result = gridDataService.getGridData(
                 "cameraProducer", "lensMountMappings",
                 null, Map.of(),
                 0, 10);
 
-        // With null filter, all CameraLensMount2CameraProducer rows are returned
-        assertTrue(result.totalCount() >= 6,
-                "Create-new mode with null filter should return all mappings (at least 6)");
+        assertEquals(0, result.totalCount(),
+                "Create-new mode must return zero rows — the new producer has no mappings yet");
     }
 }

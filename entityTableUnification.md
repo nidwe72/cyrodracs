@@ -289,4 +289,4 @@ Before starting the refactor, record answers to:
   Unification simplifies things further: today's two adapter call
   sites (`app_view.dart` ENTITY_LIST and `form_renderer_view.dart`
   GRID) collapse to one, with one host integration point for the
-  `TrinaGrid` adapter and the C1.10 carve-outs.
+  `TrinaGrid` adapter and the C1.3 carve-outs.

@@ -42,8 +42,12 @@ class GridConfigSeederTest {
                 @Override
                 public void execute() {
                     CameraProducer p = (CameraProducer) getInjectionContext().getEditorEntity();
-                    if (p == null) {
-                        setResult(null);
+                    if (p == null || p.getId() == null) {
+                        // Brand-new (transient) producer or no editor entity at all:
+                        // no mappings can possibly reference this producer yet, so the
+                        // GRID must show zero rows. Use a match-nothing predicate
+                        // (cameraProducer is a non-null FK so id IS NULL never holds).
+                        setResult(isNull("cameraProducer.id"));
                         return;
                     }
                     setResult(
@@ -57,10 +61,15 @@ class GridConfigSeederTest {
         ensureChild(lensMountRenderer, "EntityRendererEntityType", "CAMERA_LENS_MOUNT", "CAMERA_LENS_MOUNT");
         ensureChild(lensMountRenderer, "EntityRendererTemplate", "{{name}}");
 
-        // ── 3. Ensure producerCaption renderer has entityType + template ──
+        // ── 3. Ensure producerCaption renderer has entityType + template + searchFields ──
         AppConfigObjectEntity producerRenderer = ensureChild(root, "EntityRenderer", "producerCaption");
         ensureChild(producerRenderer, "EntityRendererEntityType", "CAMERA_PRODUCER", "CAMERA_PRODUCER");
         ensureChild(producerRenderer, "EntityRendererTemplate", "{{name}}");
+        // searchFields drive picker typeahead (CF3.4.3 / CF3.5.1). Collection-typed —
+        // each child's `code` IS the attribute path. See AppConfigTreeBuilder line ~295.
+        ensureChild(producerRenderer, "EntityRendererSearchField", "name");
+        ensureChild(producerRenderer, "EntityRendererSearchField", "foundationYear");
+        ensureChild(producerRenderer, "EntityRendererSearchField", "shutdownYear");
 
         // ── 4. EntityProvider: mountsForCurrentProducer ──
         AppConfigObjectEntity provider = ensureChild(root, "EntityProvider", "mountsForCurrentProducer");
@@ -96,6 +105,13 @@ class GridConfigSeederTest {
         ensureChild(colProducer, "GridTableColumnHeader", "Producer");
         ensureChild(colProducer, "GridTableColumnRendererRef", "producerCaption");
 
+        // Inventor column — a 2-segment dot-path (cameraLensMount.producer) demonstrating
+        // CF3.4.3's canonical worked example. The mount's original creator/inventor.
+        AppConfigObjectEntity colInventor = ensureChild(gridElement, "GridTableColumn", "col_inventor");
+        ensureChild(colInventor, "GridTableColumnKey", "cameraLensMount.producer");
+        ensureChild(colInventor, "GridTableColumnHeader", "Inventor");
+        ensureChild(colInventor, "GridTableColumnRendererRef", "producerCaption");
+
         // ── Verify ──
         assertNotNull(expr.getId());
         assertNotNull(provider.getId());
@@ -116,7 +132,19 @@ class GridConfigSeederTest {
         DataFormElement grid = form.getElements().get("lensMountMappings");
         assertNotNull(grid);
         assertEquals(DataFormElementType.GRID, grid.getType());
-        assertEquals(2, grid.getTableColumns().size());
+        assertEquals(3, grid.getTableColumns().size());
+
+        EntityRenderer producerCaption = config.getEntityRenderers().get("producerCaption");
+        assertNotNull(producerCaption);
+        assertEquals(List.of("name", "foundationYear", "shutdownYear"),
+                producerCaption.getSearchFields());
+
+        TableColumn inventorCol = grid.getTableColumns().stream()
+                .filter(c -> "col_inventor".equals(c.getCode()))
+                .findFirst().orElseThrow();
+        assertEquals("cameraLensMount.producer", inventorCol.getKey());
+        assertEquals("Inventor", inventorCol.getHeader());
+        assertEquals("producerCaption", inventorCol.getEntityRendererRef());
     }
 
     private AppConfigObjectEntity ensureChild(AppConfigObjectEntity parent, String typeCode, String code) {

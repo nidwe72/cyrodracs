@@ -39,6 +39,7 @@ remain pending.
 | Per-column sort glyph (CF2) | v1 | Done |
 | `columnFilterMetadata` GraphQL query (CF3) | v1 | Done |
 | Picker base + projection (CF3.4 / CF3.4.1) | v1 | Done |
+| Picker candidate restriction by distinct row values (CF3.4.3) | v1 | Done |
 | `EntityRenderer.searchFields` + `.sortFields` (CF3.5) | v1 | Done |
 | `viewData` / GRID data query — `userFilter` + `userSort` args (CF4) | v1 | Done |
 | Filter + sort merge in backend services (CF5) | v1 | Done |
@@ -77,6 +78,11 @@ each documented for the v2 / future passes:
   them by typing attribute paths manually. Wiring `DataBindingService`
   proposals into the editor for these specific types is a UX polish
   task, not on the v1 critical path.
+- **Admin-editor soft warnings (CF3.5.5)** — empty-`searchFields` on
+  a column-filter renderer, and `searchFields` paths not in the
+  template — are deferred to the same admin-editor pass as
+  CF3.5.3 autoproposals. Until then, configuration mistakes surface
+  only at runtime (no typeahead matches, or unexplained matches).
 - **Last-wins fetch dedup** is implemented on both surfaces (sequence
   number per fetch); discarded responses from earlier in-flight queries
   are silently dropped per CF1.4.
@@ -96,7 +102,7 @@ implementation work has shipped. Kept here for historical context.
   crutch on the prior `DataTable` host was removed during the
   migration. CF1 filter widgets themselves are reused verbatim;
   `trina_grid`'s built-in filter UI is bypassed per `components.md`
-  C1.10.
+  C1.3.
 - **CF1.10 — Picker keyboard navigation.** ✓ Implemented prior to
   the C1 migration and survived intact through it. The entity-ref
   picker (`EntityRefFilterInput`) wraps its `TextField` in
@@ -185,7 +191,7 @@ The column header becomes two rows per column:
   independently. A noticeably-thin input in a wide column is a defect,
   not a width-distribution artifact.
 - The filter row belongs to the header region. Sticky-header behavior
-  is provided natively by `TrinaGrid` (`components.md` C1.7).
+  is provided natively by `TrinaGrid` (`components.md` C1.3).
 
 **Historical: Material `DataTable` interim host.** During CF1's first
 release the filter widgets sat on Flutter's Material `DataTable`,
@@ -609,6 +615,485 @@ not at `columnFilterMetadata` cache time. The metadata cache holds only
 static descriptors (filter type, enum values, renderer ref); the
 picker's *query* is dynamic per call.
 
+### CF3.4.3 Picker Candidate Restriction by Distinct Row Values
+
+> **Status: shipped 2026-04-28.** Closes the picker-precision gap exposed
+> during the C1 / TrinaGrid migration smoke-test — junction-table GRIDs
+> whose row filter doesn't project cleanly onto the picker's column path.
+> Backend: combined inner-DISTINCT subquery + IN-clause via JPA Criteria;
+> picker request shape extended with `userFilter` + `editorEntityId`;
+> non-ENTITY_REF column rejected loudly. Frontend: picker dismissal on
+> any other-column filter change, distinct empty-restricted-picker
+> message, full picker payload sent through.
+
+#### Surface scope
+
+CF3.4.3 applies equally to **ENTITY_LIST ViewNodes** and **GRID
+DataFormElements**. Both surfaces drive their picker via an
+`EntityProvider`, producing the same `rowEntityType` + `baseFilter`
+inputs the algorithm needs. The canonical example below uses a GRID
+because the precision gap was first observed there during the C1
+migration smoke test, but a `cameras` ENTITY_LIST with a Janino-built
+filter would behave identically.
+
+#### Canonical example
+
+A `lensMountMappings` GRID inside the CameraProducer edit form,
+currently editing **Fuji**. The example assumes three columns (the
+existing two plus an **Inventor** column added as the seed
+prerequisite below):
+
+| Column key | Header | Renderer | Picker target type |
+|---|---|---|---|
+| `cameraLensMount` | Lens Mount | `lensMountCaption` | `CameraLensMount` |
+| `cameraProducer` | Producer | `producerCaption` | `CameraProducer` |
+| `cameraLensMount.producer` | Inventor | `producerCaption` | `CameraProducer` |
+
+The GRID's `EntityProvider.filterInjectableRef = producerMountFilter`
+(see `expressions.md` E2.8) materialises to
+`cameraProducer.id EQUALS <Fuji.id>`. Visible rows:
+
+| Lens Mount | Producer | Inventor |
+|---|---|---|
+| M42        | Fuji     | ZeissIkon |
+| X-Mount    | Fuji     | Fuji      |
+
+The user opens the **Inventor** column picker. The expected candidate
+set is `{ZeissIkon, Fuji}` — the two distinct inventors visible in
+the GRID. Without CF3.4.3 the picker offers every CameraProducer in
+the system (7 in the seed: Fuji, ZeissIkon, Pentax, Praktica, Nikon,
+Ernemann, Mamiya).
+
+#### Why CF3.4.1 cannot help here
+
+CF3.4.1's tree-rewrite is precise only when the list filter touches
+paths that begin with `<columnKey>.`. Two reasons it doesn't apply
+here:
+
+- **Janino-built filter.** The GRID's row predicate comes from a
+  `FilterInjectable` (`producerMountFilter`). CF3.4.1 explicitly
+  skips Janino in v1 (see CF3.4.1's `filterInjectableRef` rule), so
+  the projection returns `NO_CONSTRAINT` and the picker is
+  unrestricted.
+- **Cross-entity comparison.** Even if Janino were materialised
+  before projection, the resulting clause is `cameraProducer.id
+  EQUALS X`. Its path starts with `cameraProducer.`, which projects
+  only onto the `cameraProducer` column. For the **Inventor** picker
+  (column key `cameraLensMount.producer`) CF3.4.1 still returns
+  `NO_CONSTRAINT`.
+
+Without CF3.4.3 the user sees candidates that *could not produce a
+visible row* in the current grid, defeating the column-filter UX.
+
+#### Algorithm
+
+Restrict the picker's candidate set to the **distinct values of the
+picker's column path observed in the surface's full filter result —
+page-independent — with the picker's own column filter excluded**.
+The DISTINCT operates over every row that matches the effective
+filter, not only over the rows on the currently visible page; a 30-row
+mount-set spread across three pages still surfaces every distinct
+inventor present in those 30 rows.
+
+This bypasses CF3.4.1's tree-rewrite entirely; instead we ask the
+database what's actually there.
+
+##### Inputs
+
+When the picker for column `K` opens:
+
+| Input | Source | Example value (Inventor picker) |
+|---|---|---|
+| `rowEntityType` | GRID's `EntityProvider.entityType` | `CameraLensMount2CameraProducer` |
+| `columnKey` | the picker column's `key` (dot-path supported) | `"cameraLensMount.producer"` |
+| `columnTargetType` | resolved at CF3.2 via JPA metamodel walk of `columnKey` from `rowEntityType` | `CameraProducer` |
+| `baseFilter` | `EntityProvider.filter` AND result of `EntityProvider.filterInjectableRef`, **already materialised** by the existing `mergeFilters` + `resolveFilterExpressions` pipeline (CF5.1) — Janino is executed once, not re-projected | `cameraProducer.id EQUALS <Fuji.id>` |
+| `otherUserFilters` | all currently-active CF1 column filters on the GRID **except** the one for `K` | (none in canonical scenario) |
+| `typeaheadTerm` | text in the picker input | (empty initially) |
+
+##### Step 1 — Inner DISTINCT query
+
+```
+SELECT DISTINCT row.<columnKey>.id
+FROM   <rowEntityType> row
+WHERE  <baseFilter>
+  AND  <otherUserFilters>
+```
+
+Concretely, for the Inventor picker on Fuji's GRID:
+
+```
+SELECT DISTINCT row.cameraLensMount.producer.id
+FROM   CameraLensMount2CameraProducer row
+WHERE  row.cameraProducer.id = <Fuji.id>
+```
+
+→ result: `{ZeissIkon.id, Fuji.id}`.
+
+The inner query reuses the existing filter pipeline (CF5.1's
+`mergeFilters` + `resolveFilterExpressions`), called with the picker's
+own column filter omitted — same plumbing, different inputs.
+
+JPA Criteria walks multi-segment dot-paths via implicit joins — same
+mechanism `FilterExecutor.walkPath` already uses for filter and sort
+fields. Arbitrary depth is supported in `columnKey`.
+
+**Why exclude the picker's own filter.** Excel-autofilter convention:
+if the user already has `Inventor = ZeissIkon` set and re-opens the
+Inventor picker, they need to be able to *switch* to "Fuji". Leaving
+the Inventor filter in the inner query collapses the candidate set to
+what's already selected, making the picker useless. Including only
+*other* user filters preserves the standard autofilter mental model.
+
+**Stripping rule — exact-equals OR prefix.** A user filter on column
+`K` arrives in different wire shapes depending on the column's filter
+type:
+
+- STRING / NUMBER / DATE / BOOLEAN columns — `field` is exactly `K`
+  (e.g. `field: "name"`).
+- ENTITY_REF columns — `field` is `${K}.id` because the comparison is
+  by the related entity's id (e.g. `field: "cameraLensMount.id"`,
+  `field: "cameraLensMount.producer.id"`).
+
+Both shapes belong to the picker's own column. The strip rule
+therefore drops any node whose field equals `K` **or** starts with
+`${K}.`. The prefix form also covers any future AND-chained extension
+filters on sub-paths of `K`.
+
+**Always run when CF3.4.1 doesn't apply — no short-circuit.** Even
+when both `baseFilter` and `otherUserFilters` are null, the inner
+DISTINCT still runs (without a `WHERE`). For a junction-table GRID
+this constrains candidates to the values that *actually appear* in
+the row entity — junction tables only reach a subset of the picker's
+target entity table. Only CF3.4.1's projection short-circuits the
+DISTINCT (when applicable, it's cheaper); a null total predicate
+still goes through the DISTINCT path.
+
+##### Step 2 — Outer picker query
+
+```
+SELECT candidate FROM <columnTargetType> candidate
+WHERE candidate.id IN (<inner DISTINCT query>)
+  AND <typeaheadPredicate>          -- per CF3.5.1, OR-composed across EntityRenderer.searchFields
+ORDER BY <rendererSortFields>, id ASC   -- per CF3.5.1
+LIMIT <pageSize>
+```
+
+For the Inventor picker on Fuji's GRID with no typeahead term — and
+assuming `producerCaption` is configured with
+`searchFields = ["name", "foundationYear", "shutdownYear"]`:
+
+```
+SELECT candidate FROM CameraProducer candidate
+WHERE candidate.id IN ({ZeissIkon.id, Fuji.id})
+ORDER BY id ASC
+LIMIT 20
+```
+
+→ candidates: `{ZeissIkon, Fuji}`. Each is rendered server-side via
+`producerCaption` per CF3.4.2: `{ id, label: "ZeissIkon" }` and
+`{ id, label: "Fuji" }`.
+
+If the user types `Fuji`, the typeahead OR-clause matches via `name`
+and narrows to one candidate. Typing `1934` matches via
+`foundationYear` (cast to `"1934-…"`) and narrows to Fuji alone.
+Display and search are decoupled per CF3.5.1; a user can match a
+candidate by any path in `searchFields` regardless of whether the
+renderer's template displays it.
+
+##### Multi-segment dot-paths
+
+Both `columnKey` (Step 1) and `searchFields` entries (Step 2) accept
+arbitrary-depth attribute paths; they share the same
+`FilterExecutor.walkPath` machinery already used for filter and sort
+fields. Mid-path nullable references generate OUTER joins; null
+leaves yield UNKNOWN under `LOWER`/`LIKE`, so a candidate with a null
+mid-path is naturally excluded from that ORed sub-clause but can
+still match via other `searchFields`.
+
+##### Recomputation and invalidation
+
+The algorithm runs per call (per picker-open and per typeahead
+keystroke). Caching is not specified at this stage — revisit only if
+profiling shows a concrete bottleneck.
+
+While a picker is open, it is **dismissed** (closed without
+selection; any in-flight typeahead query is dropped) on:
+
+- A change to any *other* column's user filter — `otherUserFilters`
+  would change, leaving stale candidates on screen. Recommended
+  default is "close": users can re-open the picker and see a
+  fresh, correct candidate set, matching Excel-autofilter convention.
+- The user navigating to a different ViewNode, or pushing / popping
+  an `EditorFrame` so the active surface or active editor entity
+  changes. `baseFilter` may depend on `editorEntity.id`, which is
+  no longer valid.
+- The GRID's row set being reloaded by a `reloadOnChange` trigger
+  (already covered by CF1.9's "hard reload triggers" list).
+
+The frontend MUST NOT cache picker results across editor-entity
+changes inside an EditorStack: the same parent GRID re-shown with a
+different parent entity produces a different `baseFilter` and
+therefore a different inner-DISTINCT result.
+
+#### Wire-level walkthroughs
+
+Two sequence diagrams ground the algorithm against the canonical
+example. They reproduce step-for-step against the seeded test data
+once the seed prerequisite below is in place.
+
+##### Cold picker-open
+
+User is editing CameraProducer "Fuji" (id = 4) and clicks the
+**Inventor** column header to open its picker.
+
+```
+Frontend                Backend                   Janino                   DB
+   │                       │                        │                       │
+   │ POST /pickerCandidates                         │                       │
+   │ ────────────────────► │                        │                       │
+   │  { scope: { dataFormCode: "cameraProducer",                            │
+   │             elementCode: "lensMountMappings",                          │
+   │             columnKey:   "cameraLensMount.producer" },                 │
+   │    editorEntityId:  4,                         │                       │
+   │    userFilter:      ∅,                         │                       │
+   │    pickerColumnKey: "cameraLensMount.producer",│                       │
+   │    typeaheadTerm:   "" }                       │                       │
+   │                       │                        │                       │
+   │                       │ resolve config:        │                       │
+   │                       │   provider = mountsForCurrentProducer          │
+   │                       │   renderer = producerCaption                   │
+   │                       │   columnTargetType = CameraProducer            │
+   │                       │                        │                       │
+   │                       │ build baseFilter via   │                       │
+   │                       │ mergeFilters +         │                       │
+   │                       │ resolveFilterExpressions                       │
+   │                       │ ─────────────────────► │                       │
+   │                       │                        │ getEditorEntity()     │
+   │                       │                        │   → CameraProducer{4} │
+   │                       │                        │ build comparison      │
+   │                       │                        │   "cameraProducer.id" │
+   │                       │                        │   EQUALS 4            │
+   │                       │ ◄───────────────────── │                       │
+   │                       │   baseFilter materialised:                     │
+   │                       │   COMPARISON("cameraProducer.id", EQUALS, 4)   │
+   │                       │                        │                       │
+   │                       │ try CF3.4.1.project(   │                       │
+   │                       │   baseFilter,          │                       │
+   │                       │   "cameraLensMount.producer"):                 │
+   │                       │   path "cameraProducer.id" does not start      │
+   │                       │   with "cameraLensMount.producer." →           │
+   │                       │   NO_CONSTRAINT → fall back to CF3.4.3         │
+   │                       │                        │                       │
+   │                       │ strip pickerColumnKey  │                       │
+   │                       │ from userFilter →      │                       │
+   │                       │ otherUserFilters = ∅   │                       │
+   │                       │                        │                       │
+   │                       │ combined picker query  │                       │
+   │                       │ (inner DISTINCT as     │                       │
+   │                       │ subquery in IN-clause) │                       │
+   │                       │ ─────────────────────────────────────────────► │
+   │                       │  SELECT c FROM CameraProducer c                │
+   │                       │  WHERE c.id IN (                               │
+   │                       │     SELECT DISTINCT m.cameraLensMount.producer.id │
+   │                       │     FROM CameraLensMount2CameraProducer m      │
+   │                       │     WHERE m.cameraProducer.id = 4              │
+   │                       │  )                                             │
+   │                       │  ORDER BY c.id ASC                             │
+   │                       │  LIMIT 20                                      │
+   │                       │ ◄───────────────────────────────────────────── │
+   │                       │   [ ZeissIkon, Fuji ]                          │
+   │                       │                        │                       │
+   │                       │ render labels via      │                       │
+   │                       │ producerCaption        │                       │
+   │                       │ Mustache template      │                       │
+   │                       │                        │                       │
+   │ ◄──────────────────── │                        │                       │
+   │  { items: [                                    │                       │
+   │     { id: <ZeissIkon.id>, label: "ZeissIkon" },│                       │
+   │     { id: <Fuji.id>,      label: "Fuji" } ],   │                       │
+   │    totalCount: 2 }                             │                       │
+   │                       │                        │                       │
+   │ picker shows          │                        │                       │
+   │ 2 candidates          │                        │                       │
+```
+
+##### Typeahead refinement
+
+The picker is open with `{ZeissIkon, Fuji}`. The user types `1926`
+(ZeissIkon's foundation year, illustrative). Debounced 300 ms per
+CF1.4.
+
+```
+Frontend                Backend                                            DB
+   │                       │                                                │
+   │ POST /pickerCandidates  { ..., typeaheadTerm: "1926" }                 │
+   │ ────────────────────► │                                                │
+   │                       │                                                │
+   │                       │ algorithm selection identical to cold open     │
+   │                       │ → CF3.4.3 path                                 │
+   │                       │                                                │
+   │                       │ combined picker query, with typeahead OR-clause│
+   │                       │ over producerCaption.searchFields              │
+   │                       │ ─────────────────────────────────────────────► │
+   │                       │  SELECT c FROM CameraProducer c                │
+   │                       │  WHERE c.id IN (                               │
+   │                       │     SELECT DISTINCT m.cameraLensMount.producer.id │
+   │                       │     FROM CameraLensMount2CameraProducer m      │
+   │                       │     WHERE m.cameraProducer.id = 4              │
+   │                       │  )                                             │
+   │                       │  AND ( LOWER(CAST(c.name           AS string)) LIKE '%1926%' │
+   │                       │     OR LOWER(CAST(c.foundationYear AS string)) LIKE '%1926%' │
+   │                       │     OR LOWER(CAST(c.shutdownYear   AS string)) LIKE '%1926%' )│
+   │                       │  ORDER BY c.id ASC                             │
+   │                       │  LIMIT 20                                      │
+   │                       │ ◄───────────────────────────────────────────── │
+   │                       │   [ ZeissIkon ]                                │
+   │                       │                                                │
+   │ ◄──────────────────── │                                                │
+   │  picker narrows to    │                                                │
+   │  one candidate        │                                                │
+```
+
+The inner DISTINCT subquery is identical to the cold open;
+`baseFilter` and `otherUserFilters` haven't changed. Only the
+typeahead OR-clause is added. If profiling later shows the inner
+DISTINCT to be a hot path, an open-picker-scoped cache becomes a
+candidate optimisation. CF3.4.3 deliberately does not specify
+caching at this stage (see *Recomputation and invalidation*).
+
+#### Worked variants
+
+**A. Canonical — Inventor picker, no other filters:** inner →
+`{ZeissIkon, Fuji}` → picker shows 2 of the 7 producers. ✓
+
+**B. Same picker, user already selected ZeissIkon then reopens:** own
+filter excluded → inner identical to A → user can switch to Fuji. ✓
+
+**C. `cameraLensMount` picker (same GRID):** `columnTargetType =
+CameraLensMount`. Inner: `SELECT DISTINCT row.cameraLensMount.id
+WHERE row.cameraProducer.id = <Fuji.id>` → `{M42.id, X-Mount.id}` →
+picker shows 2 of 3 mounts (K-mount excluded — Fuji never adopted
+it).
+
+**D. `cameraProducer` picker (degenerate):** inner → `{Fuji.id}` →
+picker shows only Fuji. **Accepted as correct, not a defect** — the
+GRID's filter pins `cameraProducer = Fuji`, so no other producer can
+ever appear as a row. The collapse is the truthful answer. We
+deliberately do *not* hide the picker for singleton-restriction
+columns: detecting that case at metadata time would require running
+the inner DISTINCT eagerly, contradicting CF3.4.3's "picker-open
+time only" rule, and the simpler "always show the picker" behavior
+is predictable for users and reviewers.
+
+**E. Empty visible row set** (e.g. editing a brand-new producer with
+no mappings yet): inner DISTINCT returns no rows → picker shows the
+standard "no results" state per CF1.8.
+
+#### Coexistence with CF3.4.1
+
+Both algorithms remain. The runtime chooses per picker-open:
+
+- If CF3.4.1's projection produces a non-`NO_CONSTRAINT` result (i.e.
+  the list filter is purely on `<columnKey>.…` paths), use it. It's
+  precise and avoids the DISTINCT subquery — the `chinonCameras`
+  example continues to work as documented in CF3.4.1.
+- Otherwise (cross-entity, mixed groups that drop most clauses, or
+  Janino-only filters), fall back to CF3.4.3's DISTINCT-from-rows
+  query.
+
+The "Tabular ENTITY_SELECT" extension previously sketched in
+`specifications.md` (executing the FilterInjectable first, then
+running CF3.4.1's projection on the materialised tree) is **subsumed**
+by CF3.4.3 — the DISTINCT approach already handles Janino-built
+filters via the row-set query, and produces a tighter result on
+junction tables than CF3.4.1's projection ever could on those tables.
+
+#### Frontend UX
+
+- **Empty restricted picker — distinct messaging.** When the inner
+  DISTINCT yields no candidates (variant E, or any `otherUserFilters`
+  combination that produces an empty row set), the picker MUST show
+  a message specific to the situation, not the generic typeahead
+  "no results". Suggested wording: *"No candidates match the current
+  filters."* This signals that *clearing other column filters* is
+  the user's path forward, distinguishing the case from "your
+  typeahead term doesn't match anything in the candidate set".
+- **Loading state.** The two-step query (inner DISTINCT + outer
+  SELECT + Mustache rendering) can land in the 100–300 ms range
+  on a cold cache. The picker MUST show a small spinner while the
+  request is in flight; the candidate list area should not flicker
+  through a momentary empty state, which would read as "no
+  candidates" and confuse the user. Same pattern as the existing
+  ENTITY_SELECT picker.
+
+#### Edge cases
+
+- **Non-`ENTITY_REF` columns.** CF3.4.3 applies only to ENTITY_REF
+  picker columns. STRING / NUMBER / DATE / BOOLEAN columns have no
+  picker — no DISTINCT pre-query. A `pickerCandidates` request whose
+  `pickerColumnKey` resolves (per CF3.2) to a non-`ENTITY_REF` filter
+  type is **rejected with HTTP 400**: pickers exist only for
+  ENTITY_REF columns per CF1.2, and the frontend reads each column's
+  `filterType` from `columnFilterMetadata` to choose the right
+  widget. A 400 here signals a client-side defect (frontend bug,
+  stale metadata cache, or hand-crafted client) — not an admin
+  config error, which surfaces earlier as `filterType: UNSUPPORTED`
+  with no filter widget rendered. The general principle: things that
+  cannot be sensibly handled MUST fail visibly, not silently
+  degrade.
+- **Cost.** One extra `SELECT DISTINCT` per picker-open / typeahead
+  query. With a small row set (typical for embedded GRIDs) this is
+  cheap. For large ENTITY_LIST surfaces the cost is bounded by the
+  row count of the full filter result; the DISTINCT operates on the
+  same row-set the row fetch operates on (page-independent — see
+  *Algorithm* above).
+- **Nullable mid-path in `searchFields`.** Covered above under
+  *Multi-segment dot-paths*.
+
+#### Known limitations
+
+- **ENUM columns are not restricted by visible rows.** ENUM picker
+  semantics in v1 are **static** — every declared enum constant is
+  always offered, regardless of which values currently appear in the
+  GRID's rows. This is asymmetric with ENTITY_REF columns (which CF3.4.3
+  *does* tighten) and admins WILL ask why their `Inventor` picker
+  collapses to two candidates while a sibling `Status` enum picker
+  keeps offering all five constants. The asymmetry is intentional in
+  v1: ENUM values are a small fixed set, the cost of "show all
+  constants" is trivial, and the static behavior is predictable.
+  Restricting ENUM values via the same DISTINCT-from-rows approach
+  is a defensible future polish, not in scope here.
+
+#### Future considerations
+
+- **Picker-query observability.** When a picker shows surprisingly
+  few or surprisingly many candidates, admins currently cannot tell
+  whether CF3.4.1 projected cleanly, CF3.4.3 fell back to DISTINCT,
+  or the renderer's `searchFields` was empty and the typeahead
+  matched nothing. A debug log line at picker-query time naming the
+  algorithm chosen, the materialised inner SQL, and the resulting
+  candidate-count would pay for itself the first time something
+  looks off. Tracked here as a future improvement; will be folded
+  into the broader logging story when that lands.
+
+#### Timing
+
+Same as CF3.4.1 — runs at picker-open / typeahead query time, not at
+`columnFilterMetadata` cache time.
+
+#### Seed prerequisite for the worked example
+
+The canonical example assumes the `lensMountMappings` GRID has a
+third **Inventor** column with key `cameraLensMount.producer`
+(renderer `producerCaption`), and that `producerCaption` carries
+`searchFields = ["name", "foundationYear", "shutdownYear"]`. Both are
+seed-only additions; no domain or AppConfigType change is required
+(the `EntityRendererSearchField` AppConfigType is already seeded per
+CF3.5.4, and the runtime already consumes it via
+`PickerCandidatesService.buildTypeaheadPredicate`). The CF3.4.3
+implementation pass extends the existing seed accordingly.
+
 ### CF3.5 EntityRenderer — Search Fields and Sort Fields
 
 To drive the typeahead matching and the default ordering of picker
@@ -727,6 +1212,112 @@ configuration.
 
 `SortField` is the existing AppConfig type (already used by
 `EntityProvider.sortFields`); reused here, not duplicated.
+
+#### CF3.5.5 Admin Editor — Soft Warnings
+
+When configuring an `EntityRenderer` in the AppConfig admin editor,
+the editor SHOULD surface two soft warnings (non-blocking, advisory).
+Both are deferred work — they ride alongside CF3.5.3's autoproposal
+pass — but the rules are spec'd here so the implementing change has
+a definite contract:
+
+1. **Empty `searchFields` on a column-filter renderer.** If an
+   `EntityRenderer` is referenced from at least one ENTITY_REF column
+   filter context (any `TableColumn.entityRendererRef` or
+   `GridTableColumn.entityRendererRef` whose resolved
+   `ColumnFilterType` is `ENTITY_REF`) and its `searchFields` list is
+   empty, warn: *"This renderer is used by a column-filter picker
+   but has no searchFields — the picker's typeahead will match
+   nothing. Add at least one searchField (typically `name`)."*
+   Rationale: an empty `searchFields` is a legitimate opt-out
+   (CF3.5.1) for renderers that never back a picker, but silently
+   broken when one does. The warning surfaces the mismatch without
+   forcing anyone — the admin can dismiss it if they have a reason.
+2. **`searchField` path not displayed in template.** When the admin
+   adds a path to `searchFields` that does not appear as a Mustache
+   variable in `template`, warn: *"Search field `foundationYear` is
+   not displayed in the template `{{name}}` — typeahead matches will
+   look unexplained to users. Consider extending the template to
+   include it (e.g. `{{name}} ({{foundationYear}})`), or removing
+   the searchField if only `name` should be matchable."* This
+   reinforces the search-what-you-see convention from CF3.5.1
+   without enforcing it (the decoupling promise stands; the warning
+   is purely advisory).
+
+Both warnings are computed locally in the editor — no server round
+trip needed — by comparing `searchFields` against the configured
+`template` string and against the editor's known set of column-filter
+references. They do **not** block save; they only annotate the
+relevant fields. Sequencing: implement these soft warnings in the
+same pass as CF3.5.3's autoproposal work, since both touch the same
+admin-editor surface for `EntityRenderer`.
+
+### CF3.6 `TableColumn.key` Autoproposal
+
+> **🔜 Next implementation target.** Closes a DX-consistency gap:
+> `TableColumn.key` is the same attribute-dot-path concept as several
+> sibling fields that already have autoproposal, and admins currently
+> have to type it by hand.
+
+**Goal.** When configuring a `TableColumn.key` (or `GridTableColumn.key`)
+in the AppConfig admin editor, offer the same attribute-path
+autoproposal already provided for `ContextBinding.target` /
+`ContextBinding.source` (`gridElement.md` G6.4.1) and
+`EntityRenderer.searchFields` / `sortFields` (CF3.5.3).
+
+**Why.** `TableColumn.key` stores an attribute dot-path on the table's
+row entity (e.g. `"name"`, `"producer.foundationYear"`,
+`"releaseYear"`). It is consumed by:
+
+- The view / grid data fetch (server-side projection and ORDER BY).
+- `columnFilterMetadata` resolution (CF3.2 walks the path via JPA
+  metamodel to determine the column's Java type → ColumnFilterType).
+- The frontend cell renderer (read entity value at `key`).
+
+Typing it by hand is error-prone. Sibling fields with the same
+semantic (ContextBinding paths, EntityRenderer search/sort fields)
+already use `DataBindingService.bindingProposals` for completion —
+this section extends the same mechanism to `TableColumn.key`.
+
+**Resolution flow.**
+
+1. Admin focuses the `TableColumn.key` input. The editor needs to know
+   the *row entity type* the column applies to.
+2. Walk the AppConfig tree from the `TableColumn` node upward to find
+   the parent table:
+   - If parent is a `ViewNode` of type `ENTITY_LIST`: read its
+     `entityProviderRef` → resolve to `EntityProvider.entityType`.
+   - If parent is a `DataFormElement` of type `GRID`: read its
+     `entityProviderRef` → resolve to `EntityProvider.entityType`.
+3. Call `bindingProposals(entityType, prefix)` with the input's
+   current value as `prefix`. The existing GraphQL endpoint
+   (`EntityQueryController.bindingProposals`) returns dot-path
+   candidates with their resolved Java types.
+4. Render the same proposal dropdown UI used by ContextBinding /
+   EntityRenderer fields. Selecting a proposal writes the dot-path
+   into the input.
+
+**Validity rules.**
+
+- All attribute paths the JPA metamodel exposes are valid candidates,
+  regardless of type — `TableColumn.key` already accepts any type
+  (the column's `ColumnFilterType` is derived from the path's
+  resolved Java type, with `UNSUPPORTED` for unmappable types).
+- The proposal display includes the resolved Java type as a hint
+  (e.g. `producer.foundationYear : YearMonth`) — consistent with
+  CF3.5.3.
+
+**Other TableColumn fields.**
+
+- `header` (display label) — free text, no autoproposal.
+- `entityRendererRef` — refers to an `EntityRenderer` code in the
+  AppConfig. A *different* kind of autoproposal (a registry lookup,
+  not a path walk) is appropriate but out of scope for this section.
+
+**Adjacent field worth flagging (not in scope here).**
+`EntityProvider.sortFields[].field` is also a JPA dot-path on the
+provider's entity type. It currently has no autoproposal; the same
+pattern applies. Tracked separately if/when it surfaces.
 
 ---
 
@@ -1186,7 +1777,7 @@ protocol round-trip.
   (2026-04-28). Both ENTITY_LIST and GRID now render via `TrinaGrid`.
   CF1 / CF2 widgets re-hosted into `TrinaColumn.titleRenderer`
   unchanged at the protocol and state-model level; `trina_grid`'s
-  built-in filter UI is bypassed per the C1.10 integration boundary.
+  built-in filter UI is bypassed per the C1.3 integration boundary.
 - **Entity table unification**: `entityTableUnification.md`. Column filters
   must treat ENTITY_LIST and GRID identically; unification work must not
   require column-filter changes.

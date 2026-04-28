@@ -22,6 +22,30 @@ Overview of all specification documents and their implementation status.
 
 ## Pending Items
 
+### Next implementation phase
+
+These two ride together as the immediate follow-up after the
+C1 / TrinaGrid migration. They're small, independent, and both
+close gaps the migration surfaced.
+
+- **🔜 CF3.4.3 — Picker Candidate Restriction by Distinct Row Values**
+  (`columnFilters.md`). Restrict ENTITY_REF column pickers to values
+  that actually appear in the GRID's current row set, rather than
+  every entity of the picker's target type. Closes the dominant
+  picker-precision gap (junction-table GRIDs, Janino-built filters)
+  that CF3.4.1's tree-rewrite cannot. Subsumes the half-spec'd
+  "Tabular ENTITY_SELECT" extension in the *Selectable GRID* item
+  below. **First of the two.**
+- **🔜 CF3.6 — `TableColumn.key` Autoproposal**
+  (`columnFilters.md`). Wire `TableColumn.key` /
+  `GridTableColumn.key` into `DataBindingService.bindingProposals`
+  so the AppConfig admin editor offers attribute-path completion
+  the same way `ContextBinding.target/source` (G6.4.1) and
+  `EntityRenderer.searchFields/sortFields` (CF3.5.3) already do.
+  **Second of the two.**
+
+### Other open tracks
+
 - **CF7 — Advanced Filter Editor v2** (`columnFilters.md`): Nested AND/OR editor in
   EditorStack frame, session-only named filters, LITERAL + PARENT_ENTITY bindings.
   v1 (CF1–CF6) is shipped; see `columnFilters.md` "v1 implementation notes" for
@@ -65,14 +89,12 @@ Overview of all specification documents and their implementation status.
     `columnFilters.md` CF1 without protocol change: user filters AND
     with the GRID's existing base filter (static + `FilterInjectable`),
     which CF5.1 already handles.
-  - **Entity-ref column pickers inside a selectable GRID** require
-    extending `columnFilters.md` CF3.4.1's projection to **execute the
-    `FilterInjectable` first, then project its materialized
-    `FilterNode`**. The projection algorithm itself is unchanged; it
-    just receives a tree with no remaining injectables. Invocation
-    timing: on every picker-open / typeahead query, with current
-    `formState` as injection context. Not cached; microsecond-scale
-    cost.
+  - **Entity-ref column pickers inside a selectable GRID** are
+    handled uniformly by CF3.4.3 (DISTINCT-from-current-rows) once
+    that section ships — the algorithm already covers static
+    filters, FilterInjectable-built filters, and mixed cases via
+    one query. No further extension specific to selectable GRIDs is
+    needed.
   - **Host widget:** `TrinaGrid` (per `components.md` C1, shipped
     2026-04-28) is the natural renderer. Column filter UI from CF1
     applies directly via the same `buildTrinaColumn` adapter.

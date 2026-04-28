@@ -433,8 +433,13 @@ expressions:
       │       public void execute() {
       │           CameraProducer p = getInjectionContext()
       │               .getEditorEntity(CameraProducer.class);
-      │           if (p == null) {
-      │               setResult(null);  // no restriction in "create new" mode
+      │           if (p == null || p.getId() == null) {
+      │               // Brand-new (transient) producer or no editor entity
+      │               // at all — emit a match-nothing predicate so the GRID
+      │               // (and any picker built on top of it via CF3.4.3)
+      │               // legitimately returns zero rows. See "Match-nothing
+      │               // for missing editor entity" below.
+      │               setResult(isNull("cameraProducer.id"));
       │               return;
       │           }
       │           setResult(
@@ -471,6 +476,30 @@ entityProviders:
 9. FilterExecutor receives the FilterNode, merges with static filter (null → no merge needed).
 10. Builds JPA Criteria: `WHERE cameraProducer.id = 4 ORDER BY cameraLensMount.name ASC`.
 11. Returns: `[{M42, ZeissIkon}, {X-Mount, Fuji}]`.
+
+**Match-nothing for missing editor entity.** A `FilterInjectable`
+that depends on the editor entity faces three runtime cases:
+
+| Case | Editor entity | Recommended `setResult(...)` |
+|---|---|---|
+| Persisted entity (existing producer being edited) | non-null with non-null id | `comparison("…", EQUALS, entity.getId())` — the normal restrict |
+| Brand-new (transient) entity, before first save | non-null but `id == null` | **`isNull("…id")` (match-nothing)** |
+| No editor entity at all (no formState, no entityId) | null | **`isNull("…id")` (match-nothing)** |
+
+The two "match-nothing" rows used to emit `setResult(null)` (= "no
+filter" = "show all rows") in early seeds. That looked tempting —
+"if I can't compute a meaningful predicate, leave the query
+unconstrained" — but it's wrong UX: in create-new mode, no child
+rows can possibly reference the unsaved parent, so the GRID must
+show **zero rows**, not all rows. Returning a structurally
+unsatisfiable predicate (e.g. `cameraProducer.id IS NULL` against a
+non-null FK column) achieves this cleanly. CF3.4.3's picker builds
+on top of the same row predicate, so the picker also legitimately
+collapses to zero candidates — Excel-autofilter convention.
+
+Generalisation: every `filterInjectableRef` whose computation
+requires the editor entity SHOULD have a "no editor entity" branch
+emitting a match-nothing predicate, not a null result.
 
 ### E2.9 Alternate Example: expressionRef on FilterNode value (simpler approach)
 

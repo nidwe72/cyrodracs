@@ -163,6 +163,8 @@ public class GraphQLSchemaConfig {
                 term: String
                 page: Int
                 size: Int
+                userFilter: FilterNodeInput
+                editorEntityId: Int
             }
             input MapEntryInput {
                 key: String!

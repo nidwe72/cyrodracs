@@ -132,15 +132,7 @@ public class FilterExecutor {
                                          int offset, int limit,
                                          ExpressionContext context,
                                          FilterNode userFilter, List<SortField> userSort) {
-        FilterNode staticFilter = resolveFilterExpressions(provider.getFilter(), context);
-
-        FilterNode injectableFilter = null;
-        if (provider.getFilterInjectableRef() != null && expressionResolver != null) {
-            injectableFilter = expressionResolver.resolveFilter(
-                provider.getFilterInjectableRef(), context);
-        }
-
-        FilterNode effectiveFilter = mergeFilters(staticFilter, injectableFilter);
+        FilterNode effectiveFilter = materialiseFilter(provider, context);
 
         EntityProvider resolvedProvider = new EntityProvider();
         resolvedProvider.setEntityType(provider.getEntityType());
@@ -150,14 +142,44 @@ public class FilterExecutor {
         return executePagedQuery(resolvedProvider, entityClass, offset, limit, userFilter, userSort);
     }
 
-    private FilterNode mergeFilters(FilterNode staticFilter, FilterNode injectableFilter) {
-        if (staticFilter == null && injectableFilter == null) return null;
-        if (staticFilter == null) return injectableFilter;
-        if (injectableFilter == null) return staticFilter;
+    /**
+     * Materialise the provider's <em>row predicate</em> without executing any
+     * query: resolves expression refs in the static filter, runs the
+     * {@code filterInjectableRef} Janino if present, and AND-merges the two.
+     * Returns {@code null} when the provider has no row constraint at all.
+     *
+     * <p>CF3.4.3 needs this as a discrete step to feed both CF3.4.1's
+     * projection and the inner-DISTINCT subquery without re-running Janino.
+     * Same logic the row-fetch overload of
+     * {@link #executePagedQuery(EntityProvider, Class, int, int, ExpressionContext, FilterNode, List)}
+     * uses internally — exposed publicly so the picker query can reuse it.
+     */
+    public FilterNode materialiseFilter(EntityProvider provider, ExpressionContext context) {
+        FilterNode staticFilter = resolveFilterExpressions(provider.getFilter(), context);
+
+        FilterNode injectableFilter = null;
+        if (provider.getFilterInjectableRef() != null && expressionResolver != null) {
+            injectableFilter = expressionResolver.resolveFilter(
+                    provider.getFilterInjectableRef(), context);
+        }
+
+        return mergeFilters(staticFilter, injectableFilter);
+    }
+
+    /**
+     * AND-merges two FilterNode trees. Either may be null. Exposed package-wide
+     * (was private) so {@link PickerCandidatesService}'s CF3.4.3 path can
+     * combine the materialised base filter with the picker's
+     * other-user-filters before projecting / building the inner DISTINCT.
+     */
+    static FilterNode mergeFilters(FilterNode left, FilterNode right) {
+        if (left == null && right == null) return null;
+        if (left == null) return right;
+        if (right == null) return left;
 
         FilterNode merged = new FilterNode();
         merged.setType(FilterNodeType.AND_GROUP);
-        merged.setChildren(List.of(staticFilter, injectableFilter));
+        merged.setChildren(List.of(left, right));
         return merged;
     }
 

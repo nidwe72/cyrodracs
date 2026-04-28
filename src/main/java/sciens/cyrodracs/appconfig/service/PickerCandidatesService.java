@@ -11,6 +11,7 @@ import jakarta.persistence.criteria.Order;
 import jakarta.persistence.criteria.Path;
 import jakarta.persistence.criteria.Predicate;
 import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
 import jakarta.persistence.metamodel.Attribute;
 import jakarta.persistence.metamodel.EntityType;
 import jakarta.persistence.metamodel.Metamodel;
@@ -25,6 +26,7 @@ import sciens.cyrodracs.appconfig.DataFormElementType;
 import sciens.cyrodracs.appconfig.EntityProvider;
 import sciens.cyrodracs.appconfig.EntityRenderer;
 import sciens.cyrodracs.appconfig.FilterNode;
+import sciens.cyrodracs.appconfig.FilterNodeType;
 import sciens.cyrodracs.appconfig.PickerCandidate;
 import sciens.cyrodracs.appconfig.PickerCandidatesPagedResult;
 import sciens.cyrodracs.appconfig.SortDirection;
@@ -32,6 +34,7 @@ import sciens.cyrodracs.appconfig.SortField;
 import sciens.cyrodracs.appconfig.TableColumn;
 import sciens.cyrodracs.appconfig.ViewNode;
 import sciens.cyrodracs.appconfig.ViewNodeType;
+import sciens.cyrodracs.expression.ExpressionContext;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -39,14 +42,29 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Resolves entity-ref column picker candidates: walks the table's metadata to
- * find the column's target entity type, projects the table's list filter onto
- * the picker entity (via {@link FilterProjector}), applies typeahead matching
- * across {@code EntityRenderer.searchFields}, orders by the renderer's
- * sortFields with an `id ASC` tiebreaker, and renders each candidate's label
- * server-side via the renderer's Mustache template.
+ * Resolves entity-ref column picker candidates per CF3.4 (CF3.4.1 projection
+ * and CF3.4.3 distinct-row restriction). The runtime picks per picker-open:
  *
- * v1: skips {@code filterInjectableRef} (CF3.4.1 Janino paragraph).
+ * <ol>
+ *   <li>Materialise the surface's row predicate via
+ *       {@link FilterExecutor#materialiseFilter} — runs Janino once and
+ *       AND-merges with the static filter.</li>
+ *   <li>AND-combine the materialised filter with {@code otherUserFilters}
+ *       (the picker's-own-column-stripped user filter — see
+ *       {@link #stripPickerOwnFilter}).</li>
+ *   <li>Try CF3.4.1's projection on the combined tree. If non-null, use it as
+ *       the candidate-side WHERE — cheap, no DB subquery.</li>
+ *   <li>Otherwise (cross-entity / Janino-only / mixed groups that drop most
+ *       clauses, or no row predicate at all), fall back to CF3.4.3: build an
+ *       inner DISTINCT subquery on the surface's row entity and IN-restrict
+ *       the candidate query. Runs unconditionally when CF3.4.1 doesn't
+ *       apply — a junction-table GRID with no row predicate still constrains
+ *       candidates to values that actually appear in some row (Excel-autofilter
+ *       convention).</li>
+ * </ol>
+ *
+ * <p>Typeahead matching, ordering, and Mustache rendering are unchanged from
+ * earlier phases (CF3.4.2 / CF3.5.1).
  */
 @Service
 public class PickerCandidatesService {
@@ -63,6 +81,11 @@ public class PickerCandidatesService {
         this.filterExecutor = filterExecutor;
     }
 
+    /**
+     * @deprecated CF3.4.3 protocol carries userFilter + editorEntityId; prefer the
+     * 9-arg overload. Kept for tests/internal callers that don't need them.
+     */
+    @Deprecated
     @Transactional(readOnly = true)
     public PickerCandidatesPagedResult getCandidates(String viewNodeCode,
                                                      String dataFormCode,
@@ -71,6 +94,20 @@ public class PickerCandidatesService {
                                                      String term,
                                                      int page,
                                                      int pageSize) {
+        return getCandidates(viewNodeCode, dataFormCode, elementCode,
+                columnKey, term, page, pageSize, null, null);
+    }
+
+    @Transactional(readOnly = true)
+    public PickerCandidatesPagedResult getCandidates(String viewNodeCode,
+                                                     String dataFormCode,
+                                                     String elementCode,
+                                                     String columnKey,
+                                                     String term,
+                                                     int page,
+                                                     int pageSize,
+                                                     FilterNode userFilter,
+                                                     Long editorEntityId) {
         if (columnKey == null || columnKey.isBlank()) {
             throw new IllegalArgumentException("columnKey is required");
         }
@@ -98,10 +135,17 @@ public class PickerCandidatesService {
                 .orElseThrow(() -> new IllegalArgumentException(
                         "Column '" + columnKey + "' not found on the table"));
 
-        // Resolve the target entity class via the JPA static metamodel.
+        // Resolve the target entity class via the JPA static metamodel. Per CF3.4.3
+        // *Edge cases* — a non-ENTITY_REF columnKey is rejected loudly: pickers exist
+        // only for ENTITY_REF columns (CF1.2). The frontend reads the column's
+        // filterType from columnFilterMetadata and MUST NOT issue a picker request
+        // for any other type. A failure here signals a client-side defect.
         Class<?> sourceEntityClass = resolveClass(surface.provider.getEntityType().getFqcn());
         Metamodel metamodel = entityManager.getMetamodel();
         Class<?> targetEntityClass = resolveTargetEntity(sourceEntityClass, columnKey, metamodel);
+
+        // Strip the picker's own column from userFilter → otherUserFilters.
+        FilterNode otherUserFilters = stripPickerOwnFilter(userFilter, columnKey);
 
         // Resolve the column's renderer (carries searchFields + sortFields + template).
         String rendererRef = column.getEntityRendererRef();
@@ -109,8 +153,24 @@ public class PickerCandidatesService {
                 ? null
                 : config.getEntityRenderers().get(rendererRef);
 
-        // Project the table's list filter onto the picker entity (skips injectable in v1).
-        FilterNode projected = FilterProjector.project(surface.provider.getFilter(), columnKey);
+        // ── CF3.4 algorithm — Phase 3 ──────────────────────────────────
+        // (1) Materialise the surface's row predicate (runs Janino once).
+        // (2) AND-combine with otherUserFilters → totalRowFilter (the
+        //     effective row predicate for both projection and inner DISTINCT).
+        // (3) Try CF3.4.1 projection on totalRowFilter; if non-null, use it
+        //     as the candidate-side WHERE (no DB subquery — cheap path).
+        // (4) Else, fall back to CF3.4.3: inner DISTINCT subquery on the
+        //     row entity, IN-restricting the candidate query.
+        // (5) If totalRowFilter is null → short-circuit to unrestricted.
+        ExpressionContext expressionContext = buildExpressionContext(
+                config, dataFormCode, editorEntityId);
+        FilterNode materialisedBase = filterExecutor.materialiseFilter(
+                surface.provider, expressionContext);
+        FilterNode totalRowFilter = FilterExecutor.mergeFilters(
+                materialisedBase, otherUserFilters);
+        FilterNode projected = totalRowFilter == null
+                ? null
+                : FilterProjector.project(totalRowFilter, columnKey);
 
         CriteriaBuilder cb = entityManager.getCriteriaBuilder();
 
@@ -118,7 +178,8 @@ public class PickerCandidatesService {
         CriteriaQuery<Long> countQuery = cb.createQuery(Long.class);
         Root<?> countRoot = countQuery.from(targetEntityClass);
         countQuery.select(cb.count(countRoot));
-        Predicate countPred = combinePredicates(cb, countRoot, projected, renderer, term);
+        Predicate countPred = buildPickerWhere(cb, countQuery, countRoot,
+                projected, totalRowFilter, sourceEntityClass, columnKey, renderer, term);
         if (countPred != null) countQuery.where(countPred);
         long totalCount = entityManager.createQuery(countQuery).getSingleResult();
 
@@ -126,7 +187,8 @@ public class PickerCandidatesService {
         CriteriaQuery<Object> dataQuery = cb.createQuery(Object.class);
         Root<?> root = dataQuery.from(targetEntityClass);
         dataQuery.select(root);
-        Predicate dataPred = combinePredicates(cb, root, projected, renderer, term);
+        Predicate dataPred = buildPickerWhere(cb, dataQuery, root,
+                projected, totalRowFilter, sourceEntityClass, columnKey, renderer, term);
         if (dataPred != null) dataQuery.where(dataPred);
 
         List<Order> orders = new ArrayList<>();
@@ -159,21 +221,79 @@ public class PickerCandidatesService {
     }
 
     /**
-     * Combines the projected list filter with a typeahead OR-predicate over
-     * the renderer's searchFields. Either may be absent.
+     * Builds the picker query's effective WHERE — the AND-composition of:
+     * <ul>
+     *   <li>The CF3.4.1 projection (when non-null) OR a CF3.4.3 inner-DISTINCT
+     *       subquery's IN-clause OR nothing (short-circuit when no row
+     *       predicate exists).</li>
+     *   <li>The typeahead OR-predicate over {@code EntityRenderer.searchFields}.</li>
+     * </ul>
+     * Returns {@code null} when neither a restriction nor a typeahead applies.
      */
-    private Predicate combinePredicates(CriteriaBuilder cb, Root<?> root,
-                                        FilterNode projected, EntityRenderer renderer,
-                                        String term) {
-        Predicate filterPred = projected == null
-                ? null
-                : filterExecutor.buildPredicate(projected, root, cb);
+    @SuppressWarnings("unchecked")
+    private Predicate buildPickerWhere(CriteriaBuilder cb,
+                                       jakarta.persistence.criteria.AbstractQuery<?> parentQuery,
+                                       Root<?> candidate,
+                                       FilterNode projected,
+                                       FilterNode totalRowFilter,
+                                       Class<?> sourceEntityClass,
+                                       String columnKey,
+                                       EntityRenderer renderer,
+                                       String term) {
+        Predicate restrictionPred;
+        if (projected != null) {
+            // CF3.4.1 — projection clean; build candidate-side predicate from it.
+            restrictionPred = filterExecutor.buildPredicate(projected, candidate, cb);
+        } else {
+            // CF3.4.3 — inner DISTINCT subquery on the row entity. Runs even when
+            // totalRowFilter is null: a junction-table GRID (e.g. lensMountMappings)
+            // still constrains candidates to the distinct values that actually appear
+            // in any row, even with no row predicate. Excel-autofilter convention —
+            // only offer values the user could ever encounter on this surface.
+            //   SELECT DISTINCT row.<columnKey>.id FROM <sourceEntityClass> row [WHERE …]
+            Subquery<Long> sub = parentQuery.subquery(Long.class);
+            Root<?> rowRoot = sub.from(sourceEntityClass);
+            Expression<Long> innerSelect = (Expression<Long>) (Expression<?>)
+                    filterExecutor.walkPath(rowRoot, columnKey + ".id");
+            sub.select(innerSelect).distinct(true);
+            if (totalRowFilter != null) {
+                Predicate innerWhere = filterExecutor.buildPredicate(totalRowFilter, rowRoot, cb);
+                if (innerWhere != null) sub.where(innerWhere);
+            }
 
-        Predicate typeaheadPred = buildTypeaheadPredicate(cb, root, renderer, term);
+            Path<?> candidateId = candidate.get("id");
+            restrictionPred = candidateId.in(sub);
+        }
 
-        if (filterPred != null && typeaheadPred != null) return cb.and(filterPred, typeaheadPred);
-        if (filterPred != null) return filterPred;
+        Predicate typeaheadPred = buildTypeaheadPredicate(cb, candidate, renderer, term);
+
+        if (restrictionPred != null && typeaheadPred != null) {
+            return cb.and(restrictionPred, typeaheadPred);
+        }
+        if (restrictionPred != null) return restrictionPred;
         return typeaheadPred;
+    }
+
+    /**
+     * Builds the {@link ExpressionContext} the surface's
+     * {@code filterInjectableRef} sees at picker-query time. For GRID surfaces
+     * we load the editor entity from the parent DataForm; ENTITY_LIST surfaces
+     * have no parent editor and a null context produces a null Janino result
+     * (the standard "no editor entity available" pattern, see
+     * {@code producerMountFilter}).
+     */
+    private ExpressionContext buildExpressionContext(AppConfig config,
+                                                     String dataFormCode,
+                                                     Long editorEntityId) {
+        ExpressionContext context = new ExpressionContext();
+        if (editorEntityId == null || dataFormCode == null) return context;
+
+        DataForm form = config.getDataForms().get(dataFormCode);
+        if (form == null || form.getEntity() == null) return context;
+        Class<?> editorEntityClass = resolveClass(form.getEntity().getFqcn());
+        Object editorEntity = entityManager.find(editorEntityClass, editorEntityId);
+        context.put("editor", editorEntity);
+        return context;
     }
 
     private Predicate buildTypeaheadPredicate(CriteriaBuilder cb, Root<?> root,
@@ -219,6 +339,49 @@ public class PickerCandidatesService {
                     "Column '" + dotPath + "' is not an entity reference");
         }
         return attr.getJavaType();
+    }
+
+    /**
+     * Removes nodes whose {@code field == pickerColumnKey} from the user-filter
+     * tree, producing the "other user filters" set for CF3.4.3's inner DISTINCT.
+     * v1 frontend sends a single-level AND_GROUP per CF4.3, but the helper is
+     * shape-agnostic and forward-compatible with v2's nested groups.
+     *
+     * <p>Excel-autofilter convention: when the user has already selected a
+     * value in column K and reopens K's picker, K's own filter MUST NOT
+     * collapse the candidate set to that value — otherwise the user can never
+     * switch to a different value.
+     */
+    static FilterNode stripPickerOwnFilter(FilterNode userFilter, String pickerColumnKey) {
+        if (userFilter == null || pickerColumnKey == null) return userFilter;
+        FilterNodeType type = userFilter.getType();
+        if (type == FilterNodeType.COMPARISON) {
+            String field = userFilter.getField();
+            if (field == null) return userFilter;
+            // Match exact column key (e.g. STRING column "name") OR any sub-path of it
+            // (e.g. ENTITY_REF column "producer" filtered as "producer.id"). Both forms
+            // belong to the picker's own column.
+            String prefix = pickerColumnKey + ".";
+            if (field.equals(pickerColumnKey) || field.startsWith(prefix)) return null;
+            return userFilter;
+        }
+        if (type == FilterNodeType.AND_GROUP || type == FilterNodeType.OR_GROUP) {
+            List<FilterNode> kept = new ArrayList<>();
+            List<FilterNode> children = userFilter.getChildren();
+            if (children != null) {
+                for (FilterNode child : children) {
+                    FilterNode stripped = stripPickerOwnFilter(child, pickerColumnKey);
+                    if (stripped != null) kept.add(stripped);
+                }
+            }
+            if (kept.isEmpty()) return null;
+            if (kept.size() == 1 && type == FilterNodeType.AND_GROUP) return kept.get(0);
+            FilterNode result = new FilterNode();
+            result.setType(type);
+            result.setChildren(kept);
+            return result;
+        }
+        return userFilter;
     }
 
     private Long extractId(Object entity) {
