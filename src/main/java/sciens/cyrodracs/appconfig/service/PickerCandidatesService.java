@@ -484,11 +484,18 @@ public class PickerCandidatesService {
         if (type == FilterNodeType.COMPARISON) {
             String field = userFilter.getField();
             if (field == null) return userFilter;
-            // Match exact column key (e.g. STRING column "name") OR any sub-path of it
-            // (e.g. ENTITY_REF column "producer" filtered as "producer.id"). Both forms
-            // belong to the picker's own column.
-            String prefix = pickerColumnKey + ".";
-            if (field.equals(pickerColumnKey) || field.startsWith(prefix)) return null;
+            // Match the picker's own column wire shape exactly (CF3.4.3
+            // *Stripping rule — exact-equals OR exact `${K}.id`*):
+            //   - STRING / NUMBER / DATE / BOOLEAN: field == K
+            //   - ENTITY_REF: field == K + ".id"
+            // Crucially we do NOT do a general startsWith(K + ".") match —
+            // that would over-strip filters whose field shares a path
+            // prefix with the picker column but represents a *different*
+            // column. Example: picker column "cameraLensMount" + Inventor
+            // column filter "cameraLensMount.producer.id" — the latter is
+            // its own column, not the picker's, and must survive.
+            if (field.equals(pickerColumnKey)
+                    || field.equals(pickerColumnKey + ".id")) return null;
             return userFilter;
         }
         if (type == FilterNodeType.AND_GROUP || type == FilterNodeType.OR_GROUP) {

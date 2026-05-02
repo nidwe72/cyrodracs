@@ -143,6 +143,53 @@ class PickerCandidatesStripFilterTest {
         assertEquals("cameraLensMount.id", result.getField());
     }
 
+    /**
+     * CF3.4.3 *Stripping rule* — exact-equals OR exact `${K}.id` only,
+     * NOT a general `startsWith(K + ".")` match.
+     *
+     * <p>Regression for the Lens Mount picker on the lensMountMappings
+     * GRID when the user has filtered Inventor (key
+     * {@code cameraLensMount.producer}, ENTITY_REF wire shape
+     * {@code cameraLensMount.producer.id}). Before the fix the strip
+     * incorrectly treated {@code cameraLensMount.producer.id} as a
+     * sub-path of the picker column {@code cameraLensMount} and dropped
+     * the Inventor filter, causing the Lens Mount picker to show all
+     * mounts of the parent producer instead of only those visible under
+     * the Inventor filter.</p>
+     */
+    @Test
+    void deeperSubPathOfPickerKeyIsNotStripped_inventorFilterSurvivesLensMountPicker() {
+        FilterNode f = andGroup(
+                // Inventor filter — different column from "cameraLensMount",
+                // shares the same path prefix. Must survive.
+                comparison("cameraLensMount.producer.id", "4"),
+                // Some other unrelated filter — must also survive.
+                comparison("cameraProducer.id", "5")
+        );
+        FilterNode result = PickerCandidatesService.stripPickerOwnFilter(f, "cameraLensMount");
+
+        assertNotNull(result);
+        assertEquals(FilterNodeType.AND_GROUP, result.getType());
+        assertEquals(2, result.getChildren().size(),
+                "Both other-column filters must survive — neither IS the picker's own column");
+    }
+
+    /**
+     * CF3.4.3 *Stripping rule* — the picker's own ENTITY_REF wire shape
+     * {@code K + ".id"} is stripped exactly.
+     */
+    @Test
+    void ownColumnEntityRefWireShapeIsStripped() {
+        FilterNode f = andGroup(
+                comparison("cameraLensMount.id", "1"),         // own (ENTITY_REF wire) → drop
+                comparison("cameraLensMount.producer.id", "4") // Inventor → keep
+        );
+        FilterNode result = PickerCandidatesService.stripPickerOwnFilter(f, "cameraLensMount");
+
+        assertEquals(FilterNodeType.COMPARISON, result.getType());
+        assertEquals("cameraLensMount.producer.id", result.getField());
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────
 
     private static FilterNode comparison(String field, String value) {

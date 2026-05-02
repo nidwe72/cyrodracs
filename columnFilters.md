@@ -905,20 +905,34 @@ the Inventor filter in the inner query collapses the candidate set to
 what's already selected, making the picker useless. Including only
 *other* user filters preserves the standard autofilter mental model.
 
-**Stripping rule — exact-equals OR prefix.** A user filter on column
-`K` arrives in different wire shapes depending on the column's filter
-type:
+**Stripping rule — exact-equals OR exact `${K}.id`.** A user filter
+on column `K` arrives in one of two wire shapes depending on the
+column's filter type:
 
 - STRING / NUMBER / DATE / BOOLEAN columns — `field` is exactly `K`
   (e.g. `field: "name"`).
-- ENTITY_REF columns — `field` is `${K}.id` because the comparison is
-  by the related entity's id (e.g. `field: "cameraLensMount.id"`,
-  `field: "cameraLensMount.producer.id"`).
+- ENTITY_REF columns — `field` is exactly `${K}.id` because the
+  comparison is by the related entity's id (e.g. `field:
+  "cameraLensMount.id"` for an ENTITY_REF column whose key is
+  `cameraLensMount`).
 
-Both shapes belong to the picker's own column. The strip rule
-therefore drops any node whose field equals `K` **or** starts with
-`${K}.`. The prefix form also covers any future AND-chained extension
-filters on sub-paths of `K`.
+Both shapes belong to the picker's own column. The strip rule drops
+any node whose field equals `K` **or** equals `${K}.id` exactly — and
+**only** those two shapes. The strip is **not** a general
+`startsWith(K + ".")` match, which would over-strip filters whose
+field shares a path prefix with the picker column but represents a
+*different* column.
+
+*Concrete example.* Picker column `cameraLensMount` (Lens Mount,
+ENTITY_REF). The user has the Inventor column (key
+`cameraLensMount.producer`) filtered by ZeissIkon — wire form
+`cameraLensMount.producer.id == 1`. Although that field shares the
+path prefix `cameraLensMount.`, it is a **different column** (the
+Inventor, not the Lens Mount). The strip rule must let it survive so
+the inner DISTINCT honours it: `SELECT DISTINCT
+row.cameraLensMount.id FROM ... WHERE row.cameraLensMount.producer.id
+= 1` — yielding only mount IDs whose producer is ZeissIkon, not
+every mount the parent producer adopted.
 
 **Always run when CF3.4.1 doesn't apply — no short-circuit.** Even
 when both `baseFilter` and `otherUserFilters` are null, the inner
