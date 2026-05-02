@@ -786,6 +786,15 @@ picker's *query* is dynamic per call.
 > any other-column filter change, distinct empty-restricted-picker
 > message, full picker payload sent through.
 
+> **Default-on, opt-out per column.** Restriction is on by default for
+> every ENTITY_REF column. Admins can disable it per column via
+> `TableColumn.restrictByVisibleRows: false` — picker then shows
+> every entity of the column's target type (typeahead via
+> `EntityRenderer.searchFields` still applies). The flag's full
+> spec is at CF3.4.5 *Default-on with admin opt-out* (introduced
+> for ENUM dropdowns; the same flag uniformly governs ENTITY_REF
+> picker restriction too).
+
 #### Surface scope
 
 CF3.4.3 applies equally to **ENTITY_LIST ViewNodes** and **GRID
@@ -1577,6 +1586,410 @@ this GRID — no per-column recomputation.
 
 Same as CF3.4.3 — runs at picker-open / typeahead-keystroke time,
 not at `columnFilterMetadata` cache time.
+
+### CF3.4.5 ENUM Column Dropdown Restriction by Distinct Row Values
+
+CF3.4.3 tightens **ENTITY_REF** column pickers to candidates that
+appear in visible rows. This subsection adds the symmetric capability
+for **ENUM** columns: the dropdown's options are restricted to enum
+constants that actually appear in the current row set, so admins'
+filter dropdowns reflect what's actually filterable rather than every
+constant the enum class declares.
+
+Concrete motivation: on the cameras list, filtering by producer =
+Polaroid → the segment dropdown should collapse to just `ENTRY_LEVEL`
+(Polaroid only has instant cameras), not all four
+`PhotoEquipmentMarketSegment` constants. Filtering by Hasselblad →
+just `PROFESSIONAL`. Without restriction, the dropdown lies about
+what choices would actually narrow the result.
+
+#### Surface scope
+
+CF3.4.5 applies equally to **ENTITY_LIST ViewNodes** and **GRID
+DataFormElements**. Both surfaces resolve their effective row filter
+the same way (admin filter + injectable + editor entity context +
+other-column user filters), so the algorithm and wire shape are
+identical.
+
+#### Default-on with admin opt-out via `restrictByVisibleRows`
+
+`TableColumn` (and its `GridTableColumn` sibling) gains a new
+optional boolean field:
+
+```
+TableColumn
+├── key
+├── header
+├── entityRendererRef
+└── restrictByVisibleRows: Boolean   (NEW; default true)
+```
+
+- **Default: `true`** — restriction enabled. The AND-composition
+  mental model — *"the user filters by A, the dropdown / picker for
+  B should reflect what's compatible with A"* — applies uniformly,
+  matching the Excel-autofilter convention. Existing TableColumn
+  AppConfig nodes without the flag persist as default-true at
+  tree-build time; no seed change required for any column to get
+  restriction.
+- **`false`** — admin explicit opt-out. Filter input shows the full
+  unrestricted option set. Reserved for workflow-style columns
+  where the user needs to navigate to states no row currently has
+  (e.g. a `Status` enum where the user wants to filter to "Approved"
+  even when nothing is approved yet, or a "department" picker where
+  selecting a department with no current rows is a meaningful
+  navigation step).
+
+The flag's behaviour by column type:
+
+| Column type | Effect when `true` (default) | Effect when `false` (opt-out) |
+|---|---|---|
+| **ENUM** | Dropdown options restricted by the DISTINCT query (CF3.4.5 algorithm) | Dropdown shows all declared enum constants from the JPA metamodel |
+| **ENTITY_REF** | Picker restricted per CF3.4.3 (inner-DISTINCT subquery) + CF3.4.4 (pending augmentation) | Picker shows all entities of the column's target type; typeahead via `EntityRenderer.searchFields` still applies; CF3.4.3 / CF3.4.4 logic skipped |
+| **STRING / NUMBER / DATE / YEAR_MONTH / DATETIME / BOOLEAN** | No effect (no restriction concept exists for these — filter inputs are free-text / range / tristate) | Same: no effect |
+
+The flag is propagated through `columnFilterMetadata` so the **admin
+editor UI** can render its checkbox state. The runtime filter
+widgets themselves do NOT read the flag — for ENUM, the backend's
+`enumValuesForColumn` response is the source of truth; for
+ENTITY_REF, `PickerCandidatesService` honours the flag inside
+`buildPickerWhere` (skipping the projection / inner-DISTINCT
+branches when false).
+
+#### Algorithm — backend handles the flag
+
+Frontend always calls `enumValuesForColumn` when the dropdown opens.
+Backend reads `restrictByVisibleRows` from the column's metadata
+and dispatches:
+
+- **`restrictByVisibleRows == true` (default)** — runs the DISTINCT
+  query below.
+- **`restrictByVisibleRows == false`** — returns the full list of
+  declared enum constants from the JPA metamodel (same upper-bound
+  list that `columnFilterMetadata.enumValues` carries). No DB query.
+
+Putting the branch in the backend keeps the frontend dropdown
+widget uniform — it always opens by fetching options, regardless of
+any flag. The widget never needs to read `restrictByVisibleRows`
+itself; the backend's response is the source of truth.
+
+For the restricted branch:
+
+```
+SELECT DISTINCT row.<columnKey>
+FROM   <rowEntityType> row
+WHERE  <baseFilter> AND <otherUserFilters>
+```
+
+The result is the set of enum constants present in committed rows
+matching the surface's effective filter (same materialised filter
+that drives row fetching), with the picker's own column stripped from
+`userFilter` per CF3.4.3's *Stripping rule — exact-equals OR exact
+`${K}.id`* (re-used verbatim — the rule is column-key-driven and
+applies uniformly to ENTITY_REF and ENUM filters).
+
+JPA Criteria handles the DISTINCT directly on the enum column —
+`row.get(columnKey)` returns the enum value as a `String` (when
+`@Enumerated(EnumType.STRING)`) which the query selects with
+`distinct(true)`. No JOINs needed for direct enum columns; for
+dot-path enum columns (e.g. a future `producer.regulatoryStatus`)
+the same `walkPath` machinery `FilterExecutor` uses applies.
+
+##### Inputs
+
+| Input | Source | Example value (segment dropdown on cameras list, filtering by producer = Polaroid) |
+|---|---|---|
+| `rowEntityType` | resolved from scope (ENTITY_LIST → ViewNode's EntityProvider; GRID → DataFormElement's EntityProvider) | `Camera` |
+| `columnKey` | the dropdown column's `key` | `photoEquipmentMarketSegment` |
+| `baseFilter` | EntityProvider.filter AND result of filterInjectableRef, materialised once | (no static filter on `allCameras`) |
+| `otherUserFilters` | all currently active CF1 column filters EXCEPT the dropdown's own column | `producer.id == Polaroid.id` |
+
+##### Output
+
+A `[String!]` — the enum constant names present in the matching row
+set. Frontend renders the dropdown with these as the only options.
+
+#### Wire change
+
+New GraphQL query, sibling to `entityRefPickerCandidates`:
+
+```graphql
+extend type Query {
+    enumValuesForColumn(input: EnumValuesInput!): EnumValuesResult!
+}
+
+input EnumValuesInput {
+    scope: ColumnFilterScopeInput!
+    columnKey: String!
+    userFilter: FilterNodeInput          # backend strips picker's own column
+    editorEntityId: Int                  # for GRID surfaces; drives the Janino injectable
+    pendingRowEnumValues: [PendingRowEnumValueInput!]   # CF3.4.6, see below
+}
+type EnumValuesResult {
+    values: [String!]!                   # the restricted set, ordered by enum declaration order
+    # Distinct-from-empty error messaging (Frontend UX below) is determined
+    # purely by emptiness of values; no separate flag.
+}
+```
+
+`columnFilterMetadata` response gains a `restrictByVisibleRows:
+Boolean!` field per column (default `true`). It surfaces the
+authored value to the **admin editor** so the checkbox in the
+TableColumn detail panel reflects current state. The frontend
+dropdown widget itself ignores this field at runtime — the backend's
+`enumValuesForColumn` response is what drives the dropdown content.
+
+The static `enumValues` field is **kept** — it carries the
+upper-bound list of all declared enum constants. Used by the
+frontend dropdown as a fallback if the `enumValuesForColumn` request
+fails (network / server error), so the widget can still operate.
+
+#### Frontend dropdown lifecycle
+
+The `EnumFilterInput` widget always uses a fetch-on-open lifecycle,
+mirroring `EntityRefFilterInput`. Same shape regardless of the
+column's `restrictByVisibleRows` value:
+
+- On dropdown open: kick off `enumValuesForColumn` request.
+- While in flight: small spinner inside the dropdown header
+  (consistent with the picker's loading state).
+- On response: replace the dropdown's options with the response set.
+  When the backend returned a restricted set (flag = true) it may be
+  small or empty; when the backend returned the full constant list
+  (flag = false) the response equals the static `enumValues`. The
+  dropdown doesn't distinguish — it just renders what came back.
+- If the response is empty, render a distinct empty-state message
+  *"No values match the current filters."* — symmetric with
+  CF3.4.3's empty-restricted-picker UX. This distinguishes
+  "filter narrowed everything away" from "no possible value exists"
+  (which can't happen for a static enum, but the user doesn't know
+  that immediately).
+- On request failure: fallback to the static `enumValues` from
+  `columnFilterMetadata` so the widget stays usable.
+- On close: state reset; next open re-fetches.
+
+#### Open-dropdown invalidation
+
+Mirror CF3.4.3 + CF3.4.4's dismiss list — dropdown closes on:
+
+- Other-column user filter change (the dropdown's option set would
+  drift under it).
+- Pending-row mutation (CF3.4.6 below — `pendingRowDirectValues` set
+  changes).
+- Navigation away, frame push/pop, GRID `reloadOnChange`.
+
+User re-opens the dropdown to see the freshly-restricted set.
+
+#### Edit-mode behaviour
+
+In edit mode (the GRID's parent entity has an id, or the surface is
+ENTITY_LIST), the algorithm runs as described above against the
+backend's materialised row filter. No surprises — same observable
+behaviour for both surface modes.
+
+#### Frontend UX
+
+- **Empty restricted set** — distinct *"No values match the current
+  filters."* message, mirroring CF3.4.3. Signals the user that
+  *clearing other column filters* is the path forward.
+- **Loading state** — small spinner in the dropdown trigger or
+  inline at the top of the option list while the request is in
+  flight (~50 ms typical).
+- **Static list as fallback** — if the request fails (network /
+  server error), the dropdown falls back to the static `enumValues`
+  list with a small warning indicator, so the user can still operate.
+
+#### Edge cases
+
+- **Empty `restrictByVisibleRows` on a non-ENUM column.** Flag has
+  no effect. Recorded in the AppConfig but the frontend ignores it
+  for STRING / NUMBER / DATE / BOOLEAN / ENTITY_REF columns (those
+  have their own restriction mechanisms — STRING / NUMBER / DATE
+  are unrestricted text/range inputs; ENTITY_REF is CF3.4.3's
+  picker which is always restricted).
+- **Dot-path ENUM columns** (e.g. a hypothetical
+  `producer.regulatoryStatus`). Same algorithm — `walkPath`
+  resolves the dot-path on the row entity. Out of immediate scope
+  (no such columns exist today) but no special-casing needed when
+  one appears.
+- **Overlap with CF3.4.6 pending augmentation** — see CF3.4.6.
+
+#### Timing
+
+Same as CF3.4.3 — runs at dropdown-open time, not at
+`columnFilterMetadata` cache time.
+
+#### Admin-editor checkbox (CF3.6 extension)
+
+Per CF3.6's GridTableColumn parity treatment of TableColumn editing,
+the TableColumn detail panel in the AppConfig admin editor renders
+Key + Header + Renderer fields. CF3.4.5 adds a fourth field:
+
+- **Restrict by visible rows** (checkbox, default checked) — when
+  unchecked, the saved AppConfig stores `restrictByVisibleRows:
+  false`; when checked (default), the AppConfig stores `true` (or
+  no node, which is treated as `true` at tree-build time).
+
+The checkbox is shown for all TableColumn / GridTableColumn nodes
+(it's a property of the column itself, parsed even for non-ENUM
+columns where it's currently a no-op — future-proofing). Admins
+opting out an ENUM column toggle this checkbox.
+
+Save logic: writes a new `TableColumnRestrictByVisibleRows` (or
+`GridTableColumnRestrictByVisibleRows`) child node with `code` set
+to the boolean's string representation, mirror of how
+`TableColumnKey` etc. are persisted.
+
+#### Seed prerequisite for the canonical example
+
+Restriction is on by default for all ENUM columns — no flag-setting
+SQL is needed for `col_photoEquipmentMarketSegment`. The cameras
+need a meaningful spread of segment values across producers for the
+restriction to be **visibly useful** — see *Asymmetry seeding*
+below.
+
+##### Asymmetry seeding
+
+For the restriction to be **visibly useful**, the seeded data must
+have producers whose segment coverage *differs from each other*. If
+every producer covers all four segments, filtering by any producer
+shows the full dropdown — restriction is invisible.
+
+The classic photography world gives this naturally:
+
+| Producer | Segment coverage | Restriction effect |
+|---|---|---|
+| Nikon, Fuji | All four | Dropdown still shows all four (no narrowing) |
+| Hasselblad | `PROFESSIONAL` only | Dropdown collapses to one |
+| Polaroid | `ENTRY_LEVEL` only | Dropdown collapses to one |
+| Leica | `PROSUMER` + `PROFESSIONAL` | Dropdown shows two |
+
+Seed cameras across 4–5 producers giving this coverage. Existing
+seed cameras get backfilled with their (correct, real-world)
+`photoEquipmentMarketSegment` values.
+
+### CF3.4.6 Pending-Row Augmentation for ENUM Dropdowns
+
+Mirrors CF3.4.4 (picker pending augmentation) for ENUM dropdowns
+with `restrictByVisibleRows = true`: pending rows in create-new mode
+contribute their enum values at the column key to the dropdown's
+option set, so a brand-new parent's pending rows aren't excluded
+from filtering on themselves.
+
+#### Algorithm
+
+For an ENUM column with restriction enabled, the dropdown's
+effective option set is:
+
+```
+visibleEnumValues = (committed-row DISTINCT) ∪ (pending-row values for this column)
+```
+
+The committed-row DISTINCT comes from CF3.4.5's algorithm. The
+pending-row values are read from `pending.values[<columnKey>]` —
+ENUM column keys are direct fields (no dot-path traversal needed
+on the frontend, unlike CF3.4.4's ENTITY_REF case where the
+backend walks the remainder).
+
+Backend OR-unions the two sources before returning the final
+dropdown option list.
+
+#### Wire change
+
+`EnumValuesInput` (CF3.4.5) carries `pendingRowDirectValues:
+[PendingRowDirectValueInput!]` — the **same payload shape** the
+frontend already builds for CF3.4.4 picker requests
+(`{ fieldName, ids }` tuples). The backend reuses the same
+extraction logic.
+
+For ENUM specifically, the frontend's collector adapts the existing
+`_pendingRowDirectValues()` helper: for direct ENUM columns,
+collect `pending.values[<columnKey>]` (which is an enum constant
+string, not an entity id). One option:
+
+- Reuse the existing tuple shape but switch its `ids: [Int!]!` to
+  `[String!]!` for ENUM. Cleaner: a separate
+  `pendingRowEnumValues: [PendingRowEnumValueInput!]` field on
+  `EnumValuesInput` carrying `{ fieldName: String, values: [String!] }`.
+
+The latter keeps the existing CF3.4.4 payload type unchanged
+(ENTITY_REF picker uses `[Int!]!`) — no risk of accidentally feeding
+the wrong shape into either query. CF3.4.6 takes the second
+approach: distinct payload type, distinct field name on the input.
+
+```graphql
+input EnumValuesInput {
+    # ... CF3.4.5 fields ...
+    pendingRowEnumValues: [PendingRowEnumValueInput!]
+}
+input PendingRowEnumValueInput {
+    fieldName: String!     # direct ENUM field on the row entity
+    values: [String!]!     # enum constant names from pending rows
+}
+```
+
+#### Frontend collection
+
+New `_pendingRowEnumValues()` helper on `_GridFieldState`, sibling
+of `_pendingRowDirectValues()`:
+
+```dart
+List<Map<String, dynamic>> _pendingRowEnumValues() {
+  if (widget.pendingRows.isEmpty) return const [];
+  final result = <Map<String, dynamic>>[];
+  for (final entry in _columnMeta.entries) {
+    final key = entry.key;
+    if (entry.value.filterType != ColumnFilterType.entityEnum) continue;
+    if (key.contains('.')) continue;          // dot-path enums — not in scope
+    final values = <String>{};
+    for (final p in widget.pendingRows) {
+      final v = p.values[key];
+      if (v == null) continue;
+      values.add(v.toString());
+    }
+    if (values.isNotEmpty) {
+      result.add({'fieldName': key, 'values': values.toList()});
+    }
+  }
+  return result;
+}
+```
+
+Threaded into `EnumFilterInput` the same way `pendingRowDirectValues`
+is threaded into `EntityRefFilterInput` (via `column_filter_input.dart`).
+
+#### Backend OR-union
+
+Backend (`EnumValuesService` or wherever CF3.4.5 lives) takes the
+DISTINCT result and unions in the `pendingRowEnumValues` entry
+matching the dropdown's `columnKey`. Returns the union as the final
+options list. No special algorithm shape — string set union.
+
+#### Open-dropdown invalidation (extends CF3.4.5's list)
+
+Adds one trigger to CF3.4.5's dismiss list:
+
+- **Any change to `widget.pendingRows`** while the dropdown is open
+  (Add via "+", Remove via the pending-row icon). The pending values
+  set just changed; user re-opens to see the fresh union.
+
+#### Edit-mode non-applicability
+
+In edit mode `widget.pendingRows` is empty per the current
+mutual-exclusivity rule. So `pendingRowEnumValues` is empty, the OR
+contributes no values, the dropdown shows exactly CF3.4.5's
+DISTINCT result. **No observable change in edit mode** — purely
+additive for create-new.
+
+#### Edge cases
+
+- **Pending value not in the declared enum constant set.** Could
+  arise from a stale frontend config or a bug in the child editor.
+  Backend filters out unknown constants from the OR result (silent
+  drop) so the dropdown never offers a value the underlying enum
+  doesn't actually have. Future-proof — symmetric with the
+  static-list-as-upper-bound discipline.
+- **Overlap between pending and committed values.** Set union
+  dedupes naturally — no special handling needed.
 
 ### CF3.5 EntityRenderer — Search Fields and Sort Fields
 

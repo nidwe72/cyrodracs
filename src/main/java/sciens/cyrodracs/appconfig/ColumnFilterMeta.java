@@ -9,6 +9,11 @@ public class ColumnFilterMeta {
     private String entityProviderRef;
     private String entityRendererRef;
     private List<String> enumValues;
+    /** CF3.4.5 — surfaces the column's restrictByVisibleRows flag to the
+     *  admin editor checkbox. Default true. Runtime filter widgets do
+     *  NOT read this field (the backend enforces the flag inside its
+     *  picker / enum-values endpoints). */
+    private boolean restrictByVisibleRows = true;
 
     public String getColumnKey() { return columnKey; }
     public void setColumnKey(String columnKey) { this.columnKey = columnKey; }
@@ -24,4 +29,7 @@ public class ColumnFilterMeta {
 
     public List<String> getEnumValues() { return enumValues; }
     public void setEnumValues(List<String> enumValues) { this.enumValues = enumValues; }
+
+    public boolean isRestrictByVisibleRows() { return restrictByVisibleRows; }
+    public void setRestrictByVisibleRows(boolean restrictByVisibleRows) { this.restrictByVisibleRows = restrictByVisibleRows; }
 }

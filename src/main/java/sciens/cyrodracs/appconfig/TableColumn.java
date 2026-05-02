@@ -10,6 +10,13 @@ public class TableColumn implements Coded {
     private Long headerNodeId;
     private String entityRendererRef;
     private Long entityRendererRefNodeId;
+    /** CF3.4.5 — when true (default), the column's filter input restricts
+     *  its options to values present in visible rows. False opts out
+     *  (ENUM dropdown shows all declared constants; ENTITY_REF picker
+     *  shows all entities of the target type). No effect for STRING /
+     *  NUMBER / DATE / BOOLEAN columns (no restriction concept exists). */
+    private boolean restrictByVisibleRows = true;
+    private Long restrictByVisibleRowsNodeId;
 
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -36,4 +43,10 @@ public class TableColumn implements Coded {
 
     public Long getEntityRendererRefNodeId() { return entityRendererRefNodeId; }
     public void setEntityRendererRefNodeId(Long entityRendererRefNodeId) { this.entityRendererRefNodeId = entityRendererRefNodeId; }
+
+    public boolean isRestrictByVisibleRows() { return restrictByVisibleRows; }
+    public void setRestrictByVisibleRows(boolean restrictByVisibleRows) { this.restrictByVisibleRows = restrictByVisibleRows; }
+
+    public Long getRestrictByVisibleRowsNodeId() { return restrictByVisibleRowsNodeId; }
+    public void setRestrictByVisibleRowsNodeId(Long restrictByVisibleRowsNodeId) { this.restrictByVisibleRowsNodeId = restrictByVisibleRowsNodeId; }
 }

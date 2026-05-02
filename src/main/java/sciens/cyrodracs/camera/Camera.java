@@ -26,6 +26,10 @@ public class Camera {
     @JoinColumn(name = "camera_lens_mount_2_camera_producer_id")
     private CameraLensMount2CameraProducer cameraLensMount2CameraProducer;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "photo_equipment_market_segment")
+    private PhotoEquipmentMarketSegment photoEquipmentMarketSegment;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -40,4 +44,9 @@ public class Camera {
 
     public CameraLensMount2CameraProducer getCameraLensMount2CameraProducer() { return cameraLensMount2CameraProducer; }
     public void setCameraLensMount2CameraProducer(CameraLensMount2CameraProducer cameraLensMount2CameraProducer) { this.cameraLensMount2CameraProducer = cameraLensMount2CameraProducer; }
+
+    public PhotoEquipmentMarketSegment getPhotoEquipmentMarketSegment() { return photoEquipmentMarketSegment; }
+    public void setPhotoEquipmentMarketSegment(PhotoEquipmentMarketSegment photoEquipmentMarketSegment) {
+        this.photoEquipmentMarketSegment = photoEquipmentMarketSegment;
+    }
 }

@@ -41,6 +41,7 @@ public class GraphQLSchemaConfig {
         gen.addType(PickerCandidate.class);
         gen.addType(PickerCandidatesPagedResult.class);
         gen.addType(ResolvedDotPathValue.class);
+        gen.addType(EnumValuesResult.class);
         gen.addType(EntityOption.class);
         gen.addType(ElementState.class);
         gen.addType(BindingProposalResponse.class);
@@ -98,6 +99,7 @@ public class GraphQLSchemaConfig {
                 columnFilterMetadata(scope: ColumnFilterScopeInput!): [ColumnFilterMeta!]!
                 entityRefPickerCandidates(input: PickerCandidatesInput!): PickerCandidatesPagedResult!
                 resolveDotPathValues(input: ResolveDotPathValuesInput!): [ResolvedDotPathValue!]!
+                enumValuesForColumn(input: EnumValuesInput!): EnumValuesResult!
                 cameras: [Camera]
                 cameraProducers: [CameraProducer]
                 cameraLensMounts: [CameraLensMount]
@@ -200,6 +202,24 @@ public class GraphQLSchemaConfig {
             input DotPathColumnInput {
                 columnKey: String!
                 rendererRef: String
+            }
+            # CF3.4.5 — ENUM dropdown options request. Backend handles the
+            # restrictByVisibleRows flag (uniform frontend code path).
+            input EnumValuesInput {
+                scope: ColumnFilterScopeInput!
+                columnKey: String!
+                userFilter: FilterNodeInput
+                editorEntityId: Int
+                # CF3.4.6 — pending row enum values to OR-union into the
+                # restricted result. One entry per direct ENUM field on
+                # the row entity. Null/empty → no augmentation.
+                pendingRowEnumValues: [PendingRowEnumValueInput!]
+            }
+            input PendingRowEnumValueInput {
+                # Direct field name on the row entity (no dots).
+                fieldName: String!
+                # Enum constant names from pending rows.
+                values: [String!]!
             }
             input MapEntryInput {
                 key: String!

@@ -202,13 +202,20 @@ public class PickerCandidatesService {
         List<Long> pendingDirectIds = resolvePendingDirectIds(
                 columnKey, pendingRowDirectValues);
 
+        // CF3.4.5 — admin opt-out flag. When false, skip CF3.4.1 projection
+        // and CF3.4.3 inner-DISTINCT entirely; picker offers all candidates
+        // of the column's target type (typeahead via searchFields still
+        // applies). The flag also short-circuits CF3.4.4 pending augmentation
+        // — pending IDs are already in the unrestricted set.
+        boolean restrictByVisibleRows = column.isRestrictByVisibleRows();
+
         // -- count query --
         CriteriaQuery<Long> countQuery = cb.createQuery(Long.class);
         Root<?> countRoot = countQuery.from(targetEntityClass);
         countQuery.select(cb.count(countRoot));
         Predicate countPred = buildPickerWhere(cb, countQuery, countRoot,
                 projected, totalRowFilter, sourceEntityClass, columnKey, renderer, term,
-                pendingDirectIds);
+                pendingDirectIds, restrictByVisibleRows);
         if (countPred != null) countQuery.where(countPred);
         long totalCount = entityManager.createQuery(countQuery).getSingleResult();
 
@@ -218,7 +225,7 @@ public class PickerCandidatesService {
         dataQuery.select(root);
         Predicate dataPred = buildPickerWhere(cb, dataQuery, root,
                 projected, totalRowFilter, sourceEntityClass, columnKey, renderer, term,
-                pendingDirectIds);
+                pendingDirectIds, restrictByVisibleRows);
         if (dataPred != null) dataQuery.where(dataPred);
 
         List<Order> orders = new ArrayList<>();
@@ -270,9 +277,18 @@ public class PickerCandidatesService {
                                        String columnKey,
                                        EntityRenderer renderer,
                                        String term,
-                                       List<Long> pendingDirectIds) {
+                                       List<Long> pendingDirectIds,
+                                       boolean restrictByVisibleRows) {
         Predicate restrictionPred;
-        if (projected != null) {
+        if (!restrictByVisibleRows) {
+            // CF3.4.5 — admin opted out of restriction. Skip CF3.4.1 projection
+            // + CF3.4.3 inner-DISTINCT subquery entirely. CF3.4.4 pending
+            // augmentation is also a no-op here (pending IDs are already in
+            // the unrestricted set, so an OR-merge would be redundant).
+            // Picker offers all candidates of target type; only the typeahead
+            // predicate (below) narrows results.
+            restrictionPred = null;
+        } else if (projected != null) {
             // CF3.4.1 — projection clean; build candidate-side predicate from it.
             restrictionPred = filterExecutor.buildPredicate(projected, candidate, cb);
         } else {
@@ -300,12 +316,17 @@ public class PickerCandidatesService {
         // For a direct column key (no dot), pendingDirectIds are themselves the
         // augmentation. For a dot-path key, walk the remainder over the row entity's
         // first-segment target type to produce the actual candidate IDs via subquery.
-        Predicate pendingPred = buildPendingAugmentation(cb, parentQuery, candidate,
-                sourceEntityClass, columnKey, pendingDirectIds);
-        if (pendingPred != null) {
-            restrictionPred = restrictionPred == null
-                    ? pendingPred
-                    : cb.or(restrictionPred, pendingPred);
+        // Skipped when restrictByVisibleRows == false: the unrestricted picker
+        // already includes pending-referenced entities in "all candidates of
+        // target type", so the OR-merge would be redundant.
+        if (restrictByVisibleRows) {
+            Predicate pendingPred = buildPendingAugmentation(cb, parentQuery, candidate,
+                    sourceEntityClass, columnKey, pendingDirectIds);
+            if (pendingPred != null) {
+                restrictionPred = restrictionPred == null
+                        ? pendingPred
+                        : cb.or(restrictionPred, pendingPred);
+            }
         }
 
         Predicate typeaheadPred = buildTypeaheadPredicate(cb, candidate, renderer, term);

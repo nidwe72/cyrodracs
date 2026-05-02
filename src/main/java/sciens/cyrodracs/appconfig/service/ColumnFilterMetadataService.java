@@ -85,6 +85,11 @@ public class ColumnFilterMetadataService {
         ColumnFilterMeta meta = new ColumnFilterMeta();
         meta.setColumnKey(col.getKey());
         meta.setFilterType(ColumnFilterType.UNSUPPORTED);
+        // CF3.4.5 — propagate the column's restrictByVisibleRows flag to the
+        // admin editor (runtime filter widgets ignore it; backend honours it
+        // in PickerCandidatesService for ENTITY_REF and EnumValuesService
+        // for ENUM).
+        meta.setRestrictByVisibleRows(col.isRestrictByVisibleRows());
 
         Attribute<?, ?> leaf;
         try {

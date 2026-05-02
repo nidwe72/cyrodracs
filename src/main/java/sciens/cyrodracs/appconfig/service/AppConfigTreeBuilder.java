@@ -141,7 +141,8 @@ public class AppConfigTreeBuilder {
                 element.setEntityRendererRefNodeId(child.getId());
             } else if ("GridTableColumn".equals(childTypeCode)) {
                 element.getTableColumns().add(buildTableColumn(child, childrenByParentId,
-                        "GridTableColumnKey", "GridTableColumnHeader", "GridTableColumnRendererRef"));
+                        "GridTableColumnKey", "GridTableColumnHeader", "GridTableColumnRendererRef",
+                        "GridTableColumnRestrictByVisibleRows"));
             } else if ("ReloadOnChangeOf".equals(childTypeCode)) {
                 element.getReloadOnChangeOf().add(child.getCode());
             } else if ("Mandatory".equals(childTypeCode)) {
@@ -332,7 +333,8 @@ public class AppConfigTreeBuilder {
                 node.getChildren().add(buildViewNode(child, childrenByParentId));
             } else if ("TableColumn".equals(childTypeCode)) {
                 node.getTableColumns().add(buildTableColumn(child, childrenByParentId,
-                        "TableColumnKey", "TableColumnHeader", "TableColumnRendererRef"));
+                        "TableColumnKey", "TableColumnHeader", "TableColumnRendererRef",
+                        "TableColumnRestrictByVisibleRows"));
             }
         }
         return node;
@@ -341,10 +343,14 @@ public class AppConfigTreeBuilder {
     private TableColumn buildTableColumn(AppConfigObjectEntity entity,
                                           Map<Long, List<AppConfigObjectEntity>> childrenByParentId,
                                           String keyTypeCode, String headerTypeCode,
-                                          String rendererRefTypeCode) {
+                                          String rendererRefTypeCode,
+                                          String restrictByVisibleRowsTypeCode) {
         TableColumn column = new TableColumn();
         column.setId(entity.getId());
         column.setCode(entity.getCode());
+        // CF3.4.5 — restrictByVisibleRows defaults to true (set on the field
+        // initialiser in TableColumn). Only flipped here when an explicit
+        // child node is present.
 
         for (AppConfigObjectEntity child : childrenOf(entity.getId(), childrenByParentId)) {
             String childTypeCode = child.getType().getCode();
@@ -357,6 +363,9 @@ public class AppConfigTreeBuilder {
             } else if (rendererRefTypeCode.equals(childTypeCode)) {
                 column.setEntityRendererRef(child.getCode());
                 column.setEntityRendererRefNodeId(child.getId());
+            } else if (restrictByVisibleRowsTypeCode.equals(childTypeCode)) {
+                column.setRestrictByVisibleRows(Boolean.parseBoolean(child.getCode()));
+                column.setRestrictByVisibleRowsNodeId(child.getId());
             }
         }
         return column;

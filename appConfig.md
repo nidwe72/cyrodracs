@@ -475,9 +475,50 @@ class AppConfigStore {
 }
 ```
 
----
+### Maintenance — `*NodeId` SDL exclusion vs. detail-panel save flow
 
-## DataFormRenderer
+`JavaSchemaGenerator` excludes every field whose name ends in `NodeId`
+(see `globalSuffixExclusions = ["NodeId"]`). The `appConfig` GraphQL
+response therefore never carries `keyNodeId`, `headerNodeId`,
+`entityRendererRefNodeId`, `restrictByVisibleRowsNodeId`, etc.
+
+The detail panel's save flow (`app_config_detail_panel.dart`,
+`_onSave`, `n.isAnyTableColumn` branch and analogous branches) is
+written as:
+
+```
+if (n.<field>NodeId != null) updateNode(<field>NodeId, ...)
+else                          addNode(parent: n.id, typeCode: ...)
+```
+
+Because the parsed model always has `<field>NodeId == null`, every save
+falls into the `addNode` arm and creates a *new* child node instead of
+updating the existing one. `AppConfigTreeBuilder.buildTableColumn`
+iterates all children of a given typeCode and last-write-wins, so the
+displayed value is correct — but child rows accumulate in
+`APP_CONFIG_OBJECT` on every save.
+
+This affects all single-cardinality scalar children that the editor
+edits (TableColumn key/header/rendererRef, the CF3.4.5
+`restrictByVisibleRows` flag, and analogous fields on other instance
+types). It is a latent issue, not a functional bug; users see correct
+behaviour but the underlying table grows.
+
+Two cleanup options:
+
+1. Expose `*NodeId` fields in the SDL — e.g. let `JavaSchemaGenerator`
+   take a per-class whitelist that overrides the global suffix
+   exclusion. The frontend already reads them; only the schema needs
+   to surface them.
+2. Make `AppConfigMutationService.addNode` dedupe single-cardinality
+   children: when adding a child with a typeCode that the parent's
+   AppConfigType marks as single-cardinality, delete any pre-existing
+   sibling with the same typeCode in the same transaction (or update
+   it in place).
+
+Option 1 is mechanical and changes no semantics. Option 2 is more
+defensive but requires the type registry to carry a cardinality flag
+(it currently does not).
 
 A view that renders any `DataForm` stored in the `AppConfig` tree using the
 application's form-renderer components.

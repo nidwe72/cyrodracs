@@ -156,6 +156,12 @@ public class AppConfigTypeSeeder {
         ensureType("TableColumnRendererRef", tableColumnType, "entityRendererRef", false, false,
                 "java.lang.String");
 
+        // CF3.4.5 — opt-out flag for restrict-by-visible-rows behaviour on
+        // ENUM dropdowns and ENTITY_REF pickers. Default true at tree-build
+        // time; admin can set false explicitly via the admin editor checkbox.
+        ensureType("TableColumnRestrictByVisibleRows", tableColumnType, "restrictByVisibleRows", false, false,
+                "java.lang.Boolean");
+
         // GRID TableColumns on DataFormElement (reuses TableColumn model)
         AppConfigTypeEntity gridTableColumnType = ensureType("GridTableColumn", dataFormElementType, "tableColumns", true, false,
                 "sciens.cyrodracs.appconfig.TableColumn");
@@ -168,6 +174,10 @@ public class AppConfigTypeSeeder {
 
         ensureType("GridTableColumnRendererRef", gridTableColumnType, "entityRendererRef", false, false,
                 "java.lang.String");
+
+        // CF3.4.5 — same flag for GridTableColumn (parent: GridTableColumn).
+        ensureType("GridTableColumnRestrictByVisibleRows", gridTableColumnType, "restrictByVisibleRows", false, false,
+                "java.lang.Boolean");
 
         // AddAction on DataFormElement (generic: used by GRID, reusable by other element types)
         AppConfigTypeEntity addActionType = ensureType("AddAction", dataFormElementType, "addAction", false, false,
