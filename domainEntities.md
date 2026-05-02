@@ -74,6 +74,7 @@ For example, the M42 mount was created by ZeissIkon but is also used by Pentax a
 | id             | Long             | id                   | Primary key (auto-generated)                     |
 | cameraLensMount| CameraLensMount  | camera_lens_mount_id | @ManyToOne -- the lens mount                     |
 | cameraProducer | CameraProducer   | camera_producer_id   | @ManyToOne -- a producer that uses this mount     |
+| comment        | String           | comment              | Optional free-text note about why / when this producer adopted the mount (nullable, ~1000 chars) — see Task D4 |
 
 **Table:** `CAMERA_LENS_MOUNT_2_CAMERA_PRODUCER`
 
@@ -346,6 +347,79 @@ enables the canonical demo for the future ENUM-restriction work
 
 ---
 
+### Task D4 -- Add `comment` field to `CameraLensMount2CameraProducer`
+
+**Goal:** Extend the mapping entity with an optional free-text
+`comment` field capturing the historical / contextual note about why
+or when a producer adopted a foreign lens mount. The field is
+nullable; most rows can leave it blank.
+
+This task is also the **testability enabler** for `columnFilters.md`
+CF1.5.1 — the `lensMountMappings` GRID's existing columns are all
+ENTITY_REF (cameraLensMount, cameraProducer, cameraLensMount.producer),
+which makes pending-row client-side filtering hard to demonstrate
+end-to-end (the picker is empty in create-new mode pending CF3.4.4).
+A free-text STRING column adds a directly-typeable filter input that
+exercises CF1.5.1's STRING predicate path on pending rows on day one.
+
+#### D4.1 Entity change
+
+```java
+@Entity
+@Table(name = "CAMERA_LENS_MOUNT_2_CAMERA_PRODUCER",
+       uniqueConstraints = @UniqueConstraint(
+           columnNames = {"camera_lens_mount_id", "camera_producer_id"}))
+public class CameraLensMount2CameraProducer {
+
+    // existing fields ...
+
+    @Column(name = "comment", length = 1000, nullable = true)
+    private String comment;
+
+    // getter / setter
+}
+```
+
+`length = 1000` is generous for the kind of historical paragraphs
+expected (the canonical Fuji-M42 seed below is ~280 chars). Nullable
+because most mappings won't carry a note.
+
+#### D4.2 Surface on the `lensMountMappings` GRID
+
+The new field is added as a column on the GRID (`gridElement.md` G2)
+with key `comment` and header `"Comment"`. With CF3 in place the
+column auto-resolves to `ColumnFilterType.STRING`, giving users a
+free-text filter input that exercises CF1.5.1's STRING predicate
+on both committed and pending rows.
+
+Long comments are visually truncated with a hover tooltip showing
+the full text — the existing `defaultCellRenderer` in
+`trina_grid_adapter.dart` already wraps cell text with
+`Tooltip(message: text, child: Text(... overflow: ellipsis))`. No
+renderer changes needed.
+
+#### D4.3 Seed data
+
+The canonical seed for Fuji's mapping to the M42 mount carries:
+
+> Fujifilm adopted the M42 screw mount in 1970 to give their Fujica
+> ST701 instant compatibility with the industry's most popular
+> "universal" lens standard. They eventually moved away from it in
+> 1979 to transition to a faster bayonet mount that allowed for more
+> advanced electronic communication between the lens and camera.
+
+Other seeded mappings can leave `comment` null; one rich example is
+enough to demonstrate the truncate-with-tooltip rendering and to
+exercise CF1.5.1's STRING predicate on a real value (e.g. typing
+"1970" into the Comment column filter narrows to this row).
+
+#### D4.4 No DataFormEntityType change
+
+`comment` is a scalar field on an existing entity; no
+`DataFormEntityType` registry change.
+
+---
+
 ## Implementation Order
 
 ```
@@ -356,6 +430,9 @@ D2  (create CameraLensMount2CameraProducer mapping entity)
  |
  v
 D3  (PhotoEquipmentMarketSegment enum + Camera.photoEquipmentMarketSegment field)
+ |
+ v
+D4  (add comment String field to CameraLensMount2CameraProducer + Fuji-M42 seed)
 ```
 
 ## Cross-References

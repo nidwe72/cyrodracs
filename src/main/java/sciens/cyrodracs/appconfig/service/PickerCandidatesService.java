@@ -108,6 +108,29 @@ public class PickerCandidatesService {
                                                      int pageSize,
                                                      FilterNode userFilter,
                                                      Long editorEntityId) {
+        return getCandidates(viewNodeCode, dataFormCode, elementCode,
+                columnKey, term, page, pageSize, userFilter, editorEntityId, null);
+    }
+
+    /**
+     * CF3.4.4 entry point — same as the 9-arg overload, plus an optional
+     * {@code pendingRowDirectValues} map keyed by direct field name on the
+     * row entity, holding the referenced committed-entity ids from each
+     * pending row's value at that field. Entries unrelated to the picker's
+     * column are tolerated and ignored. {@code null} or empty map means
+     * "no pending augmentation" — picker reduces to CF3.4.3's behaviour.
+     */
+    @Transactional(readOnly = true)
+    public PickerCandidatesPagedResult getCandidates(String viewNodeCode,
+                                                     String dataFormCode,
+                                                     String elementCode,
+                                                     String columnKey,
+                                                     String term,
+                                                     int page,
+                                                     int pageSize,
+                                                     FilterNode userFilter,
+                                                     Long editorEntityId,
+                                                     Map<String, List<Long>> pendingRowDirectValues) {
         if (columnKey == null || columnKey.isBlank()) {
             throw new IllegalArgumentException("columnKey is required");
         }
@@ -174,12 +197,18 @@ public class PickerCandidatesService {
 
         CriteriaBuilder cb = entityManager.getCriteriaBuilder();
 
+        // CF3.4.4 — resolve pending direct IDs for the column's first segment.
+        // Empty list (or no entry) means no pending augmentation.
+        List<Long> pendingDirectIds = resolvePendingDirectIds(
+                columnKey, pendingRowDirectValues);
+
         // -- count query --
         CriteriaQuery<Long> countQuery = cb.createQuery(Long.class);
         Root<?> countRoot = countQuery.from(targetEntityClass);
         countQuery.select(cb.count(countRoot));
         Predicate countPred = buildPickerWhere(cb, countQuery, countRoot,
-                projected, totalRowFilter, sourceEntityClass, columnKey, renderer, term);
+                projected, totalRowFilter, sourceEntityClass, columnKey, renderer, term,
+                pendingDirectIds);
         if (countPred != null) countQuery.where(countPred);
         long totalCount = entityManager.createQuery(countQuery).getSingleResult();
 
@@ -188,7 +217,8 @@ public class PickerCandidatesService {
         Root<?> root = dataQuery.from(targetEntityClass);
         dataQuery.select(root);
         Predicate dataPred = buildPickerWhere(cb, dataQuery, root,
-                projected, totalRowFilter, sourceEntityClass, columnKey, renderer, term);
+                projected, totalRowFilter, sourceEntityClass, columnKey, renderer, term,
+                pendingDirectIds);
         if (dataPred != null) dataQuery.where(dataPred);
 
         List<Order> orders = new ArrayList<>();
@@ -239,7 +269,8 @@ public class PickerCandidatesService {
                                        Class<?> sourceEntityClass,
                                        String columnKey,
                                        EntityRenderer renderer,
-                                       String term) {
+                                       String term,
+                                       List<Long> pendingDirectIds) {
         Predicate restrictionPred;
         if (projected != null) {
             // CF3.4.1 — projection clean; build candidate-side predicate from it.
@@ -265,6 +296,18 @@ public class PickerCandidatesService {
             restrictionPred = candidateId.in(sub);
         }
 
+        // CF3.4.4 — OR-augment the candidate set with pending-row-derived IDs.
+        // For a direct column key (no dot), pendingDirectIds are themselves the
+        // augmentation. For a dot-path key, walk the remainder over the row entity's
+        // first-segment target type to produce the actual candidate IDs via subquery.
+        Predicate pendingPred = buildPendingAugmentation(cb, parentQuery, candidate,
+                sourceEntityClass, columnKey, pendingDirectIds);
+        if (pendingPred != null) {
+            restrictionPred = restrictionPred == null
+                    ? pendingPred
+                    : cb.or(restrictionPred, pendingPred);
+        }
+
         Predicate typeaheadPred = buildTypeaheadPredicate(cb, candidate, renderer, term);
 
         if (restrictionPred != null && typeaheadPred != null) {
@@ -272,6 +315,89 @@ public class PickerCandidatesService {
         }
         if (restrictionPred != null) return restrictionPred;
         return typeaheadPred;
+    }
+
+    /**
+     * CF3.4.4 — resolves the pending IDs for the picker's column key into the
+     * candidate-side augmentation predicate.
+     *
+     * <p>For a direct column key (`firstSegment` only, no remainder): the
+     * pending IDs are themselves the candidate-side IDs.</p>
+     *
+     * <p>For a dot-path key (`firstSegment.remainder`): walks the remainder
+     * over the row entity's first-segment target type via a subquery,
+     * producing the candidate-side IDs:
+     * <pre>
+     *   SELECT firstSegmentEntity.&lt;remainder&gt;.id
+     *   FROM   &lt;firstSegmentTargetType&gt; firstSegmentEntity
+     *   WHERE  firstSegmentEntity.id IN (:pendingDirectIds)
+     * </pre>
+     * </p>
+     *
+     * <p>Returns {@code null} when {@code pendingDirectIds} is null/empty.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private Predicate buildPendingAugmentation(CriteriaBuilder cb,
+                                               jakarta.persistence.criteria.AbstractQuery<?> parentQuery,
+                                               Root<?> candidate,
+                                               Class<?> sourceEntityClass,
+                                               String columnKey,
+                                               List<Long> pendingDirectIds) {
+        if (pendingDirectIds == null || pendingDirectIds.isEmpty()) return null;
+
+        int dotIndex = columnKey.indexOf('.');
+        Path<?> candidateId = candidate.get("id");
+
+        if (dotIndex < 0) {
+            // Direct column — pendingDirectIds ARE the candidate IDs.
+            return candidateId.in(pendingDirectIds);
+        }
+
+        // Dot-path column — walk the remainder over the first-segment target type.
+        String firstSegment = columnKey.substring(0, dotIndex);
+        String remainder = columnKey.substring(dotIndex + 1);
+        Class<?> firstSegmentTargetType = resolveFirstSegmentTargetType(
+                sourceEntityClass, firstSegment);
+        if (firstSegmentTargetType == null) return null;
+
+        Subquery<Long> sub = parentQuery.subquery(Long.class);
+        Root<?> firstSegRoot = sub.from(firstSegmentTargetType);
+        Expression<Long> remainderId = (Expression<Long>) (Expression<?>)
+                filterExecutor.walkPath(firstSegRoot, remainder + ".id");
+        sub.select(remainderId);
+        sub.where(firstSegRoot.get("id").in(pendingDirectIds));
+        return candidateId.in(sub);
+    }
+
+    /**
+     * Resolves the picker's pending IDs from the request's
+     * {@code pendingRowDirectValues} payload by looking up the entry for the
+     * column key's first segment. Returns null when no entry matches.
+     */
+    private List<Long> resolvePendingDirectIds(String columnKey,
+                                               Map<String, List<Long>> pendingRowDirectValues) {
+        if (pendingRowDirectValues == null || pendingRowDirectValues.isEmpty()) return null;
+        int dotIndex = columnKey.indexOf('.');
+        String firstSegment = dotIndex < 0 ? columnKey : columnKey.substring(0, dotIndex);
+        return pendingRowDirectValues.get(firstSegment);
+    }
+
+    /**
+     * Resolves the Java target type of a direct singular association named
+     * {@code firstSegment} on {@code sourceEntityClass}. Returns null if the
+     * field doesn't exist or isn't a singular association — caller treats
+     * those as "no augmentation" (admin config error surfaces elsewhere).
+     */
+    private Class<?> resolveFirstSegmentTargetType(Class<?> sourceEntityClass,
+                                                   String firstSegment) {
+        try {
+            EntityType<?> entityType = entityManager.getMetamodel().entity(sourceEntityClass);
+            Attribute<?, ?> attr = entityType.getAttribute(firstSegment);
+            if (!(attr instanceof SingularAttribute<?, ?> singular)) return null;
+            return singular.getJavaType();
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /**

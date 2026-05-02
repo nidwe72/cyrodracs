@@ -12,6 +12,7 @@ import sciens.cyrodracs.camera.CameraProducer;
 import sciens.cyrodracs.camera.CameraProducerRepository;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -299,5 +300,115 @@ class PickerCandidatesEndToEndTest {
         assertEquals(1, result.getTotalCount(),
                 "searchFields[foundationYear] should match Fuji even though the template only shows name");
         assertEquals("Fuji", result.getItems().get(0).getLabel());
+    }
+
+    // ─── CF3.4.4 — Pending Rows in the Picker Candidate Set ────────────────
+
+    /**
+     * CF3.4.4 — direct column key, create-new mode with pending IDs. The
+     * pending CameraLensMount IDs become the picker candidate set directly
+     * (no remainder to walk). Mirrors the canonical example in CF3.4.4
+     * <em>Example A — Lens Mount column</em>.
+     */
+    @Test
+    @Transactional(readOnly = true)
+    void directColumn_pendingIdsBecomeCandidates_inCreateNewMode() {
+        CameraLensMount m42 = mountRepo.findByName("M42").orElseThrow();
+        CameraLensMount xMount = mountRepo.findByName("X-Mount").orElseThrow();
+
+        Map<String, List<Long>> pending = Map.of(
+                "cameraLensMount", List.of(m42.getId(), xMount.getId()));
+
+        var result = pickerService.getCandidates(
+                null, "cameraProducer", "lensMountMappings",
+                "cameraLensMount", null,
+                0, 20,
+                null, null,                  // create-new: no editor entity
+                pending);
+
+        Set<String> labels = result.getItems().stream()
+                .map(PickerCandidate::getLabel)
+                .collect(Collectors.toSet());
+        assertEquals(2, result.getTotalCount(),
+                "Direct-column augmentation: 2 pending IDs → 2 candidates");
+        assertTrue(labels.contains("M42") && labels.contains("X-Mount"),
+                "Picker should surface M42 and X-Mount from pending IDs: " + labels);
+    }
+
+    /**
+     * CF3.4.4 — dot-path column key, create-new mode with pending IDs. The
+     * backend walks the remainder (`producer`) over the first-segment target
+     * type (`CameraLensMount`) to yield the inventor producers. Mirrors the
+     * canonical example in CF3.4.4 <em>Example B — Inventor column</em>.
+     */
+    @Test
+    @Transactional(readOnly = true)
+    void dotPathColumn_pendingIdsResolveViaRemainder_inCreateNewMode() {
+        CameraLensMount m42 = mountRepo.findByName("M42").orElseThrow();
+        CameraLensMount xMount = mountRepo.findByName("X-Mount").orElseThrow();
+
+        Map<String, List<Long>> pending = Map.of(
+                "cameraLensMount", List.of(m42.getId(), xMount.getId()));
+
+        var result = pickerService.getCandidates(
+                null, "cameraProducer", "lensMountMappings",
+                "cameraLensMount.producer", null,
+                0, 20,
+                null, null,                  // create-new: no editor entity
+                pending);
+
+        Set<String> labels = result.getItems().stream()
+                .map(PickerCandidate::getLabel)
+                .collect(Collectors.toSet());
+        // M42 was invented by ZeissIkon; X-Mount was invented by Fuji.
+        assertEquals(2, result.getTotalCount(),
+                "Dot-path augmentation: backend walks .producer to yield 2 inventors");
+        assertTrue(labels.contains("ZeissIkon") && labels.contains("Fuji"),
+                "Picker should surface ZeissIkon and Fuji as inventors: " + labels);
+    }
+
+    /**
+     * CF3.4.4 — empty {@code pendingRowDirectValues} reduces to CF3.4.3
+     * behaviour (zero candidates in create-new mode). This is the
+     * non-regression check.
+     */
+    @Test
+    @Transactional(readOnly = true)
+    void emptyPendingValues_reducesToCF343_inCreateNewMode() {
+        var result = pickerService.getCandidates(
+                null, "cameraProducer", "lensMountMappings",
+                "cameraLensMount", null,
+                0, 20,
+                null, null,
+                Map.of());                   // empty map — no augmentation
+
+        assertEquals(0, result.getTotalCount(),
+                "Empty pendingRowDirectValues: picker reduces to CF3.4.3, zero candidates");
+    }
+
+    /**
+     * CF3.4.4 — pendingRowDirectValues entry whose fieldName doesn't match
+     * the picker column's first segment is ignored. Augmentation contributes
+     * nothing; picker reduces to CF3.4.3.
+     */
+    @Test
+    @Transactional(readOnly = true)
+    void unrelatedPendingFieldName_ignored_inCreateNewMode() {
+        // 'cameraProducer' is a direct field on the row entity, but it is
+        // also the picker column's own first segment in this test, so we
+        // use a definitely-unrelated key — 'fooBar' — to verify the picker
+        // truly ignores fields it didn't ask about.
+        Map<String, List<Long>> pending = Map.of(
+                "fooBar", List.of(1L, 2L));
+
+        var result = pickerService.getCandidates(
+                null, "cameraProducer", "lensMountMappings",
+                "cameraLensMount", null,
+                0, 20,
+                null, null,
+                pending);
+
+        assertEquals(0, result.getTotalCount(),
+                "Unrelated fieldName: backend ignores it and picker reduces to CF3.4.3");
     }
 }

@@ -129,10 +129,18 @@ AppConfig
                     │   ├── key: "cameraLensMount"
                     │   ├── header: "Lens Mount"
                     │   └── entityRendererRef: "lensMountCaption"
-                    └── "col_mountProducer"
-                        ├── key: "cameraLensMount.producer"
-                        ├── header: "Original Creator"
-                        └── entityRendererRef: "producerCaption"
+                    ├── "col_mountProducer"
+                    │   ├── key: "cameraLensMount.producer"
+                    │   ├── header: "Original Creator"
+                    │   └── entityRendererRef: "producerCaption"
+                    └── "col_comment"
+                        ├── key: "comment"
+                        └── header: "Comment"
+                        # STRING column (no entityRendererRef); long
+                        # text truncates with hover tooltip via the
+                        # adapter's defaultCellRenderer. See
+                        # domainEntities.md Task D4 for the field
+                        # itself + the canonical Fuji-M42 seed value.
 ```
 
 ### G1.5 REST API
@@ -253,7 +261,8 @@ needs to read them from the DataFormElement:
   "entityProviderRef": "mountsForCurrentProducer",
   "tableColumns": [
     { "code": "col_mount", "key": "cameraLensMount", "header": "Lens Mount", "entityRendererRef": "lensMountCaption" },
-    { "code": "col_mountProducer", "key": "cameraProducer", "header": "Producer", "entityRendererRef": "producerCaption" }
+    { "code": "col_mountProducer", "key": "cameraProducer", "header": "Producer", "entityRendererRef": "producerCaption" },
+    { "code": "col_comment", "key": "comment", "header": "Comment" }
   ]
 }
 ```
@@ -1486,6 +1495,177 @@ The resolver works generically because:
 
 Adding a new entity with constraints requires **no error message configuration** — the
 resolver introspects the existing annotations and config automatically.
+
+### G7.8 Pending-Row Dot-Path Resolution
+
+**Problem.** Pending rows (G7.6) hold only **direct field values** captured from
+the child editor — `pending.values["cameraLensMount"] = 1` (M42's id). They do
+**not** hold derived values for **dot-path columns** like
+`cameraLensMount.producer` (Inventor): the frontend doesn't know that M42 is
+ZeissIkon's invention without consulting the backend, and the child editor has
+no field for the derived path.
+
+This breaks three downstream behaviours on dot-path columns for pending rows:
+
+| Surface | What needs the derived value | Without G7.8 |
+|---|---|---|
+| Cell display | The value to render in the cell | Empty cell |
+| `columnFilters.md` CF1.5.1 client-side filter | The cell value to compare against the filter | `cellValue == null` → predicate fails → row dropped or kept incorrectly |
+| `columnFilters.md` CF2.5 client-side sort | The cell value the comparator orders by | All pending rows compare equal at this key → sort no-op |
+
+CF3.4.4 already addressed the **picker** for these columns by having the
+backend walk the dot-path inside the SQL subquery. G7.8 does the same for
+the GRID's own state — display, filter, sort — by having the frontend
+fetch resolved values from a new backend endpoint on demand.
+
+#### G7.8.1 Algorithm — lazy GRID-render-time resolution
+
+The host GRID (`_GridFieldState`) maintains a per-pending-row cache keyed
+by `pendingRowIndex`:
+
+```dart
+Map<int, Map<String, dynamic>> _pendingDotPathValues = {};   // index → columnKey → leafId
+Map<int, Map<String, dynamic>> _pendingDotPathDisplays = {}; // index → columnKey → display string
+```
+
+When `widget.pendingRows` grows (new row added in the child editor), the
+GRID identifies any **dot-path ENTITY_REF columns** on this surface and
+calls the new `resolveDotPathValues` query in a **single batched
+round-trip** that covers all newly-added rows × all dot-path columns. The
+response populates the cache. When `widget.pendingRows` shrinks (row
+removed), the corresponding cache entry is dropped.
+
+Filter / sort / display read effective values via two helpers that fall
+back to direct-value access for non-dot-path keys:
+
+```dart
+dynamic _effectiveValue(int pendingIndex, PendingChild pending, String columnKey) {
+  if (columnKey.contains('.')) {
+    return _pendingDotPathValues[pendingIndex]?[columnKey];
+  }
+  return pending.values[columnKey];
+}
+
+dynamic _effectiveDisplay(int pendingIndex, PendingChild pending, String columnKey) {
+  if (columnKey.contains('.')) {
+    return _pendingDotPathDisplays[pendingIndex]?[columnKey];
+  }
+  return pending.displayValues[columnKey] ?? pending.values[columnKey];
+}
+```
+
+The brief window between "new pending row appears" and "resolution
+response lands" shows empty cells for dot-path columns; once the response
+lands (~50 ms typical, same as the picker query) the GRID rebuilds with
+populated cells. Acceptable latency — pending row addition is rare and
+already involves a child-editor save round-trip.
+
+#### G7.8.2 Wire format
+
+```graphql
+extend type Query {
+    resolveDotPathValues(input: ResolveDotPathValuesInput!): [ResolvedDotPathValue!]!
+}
+
+input ResolveDotPathValuesInput {
+    # FQCN of the GRID's row entity, e.g.
+    # "sciens.cyrodracs.camera.CameraLensMount2CameraProducer".
+    rowEntityType: String!
+    # One entry per (pendingRowIndex, direct field) tuple. The
+    # pendingRowIndex is opaque to the backend — echoed in the response so
+    # the frontend can match each result back to the right pending row.
+    directValues: [DirectFieldValueInput!]!
+    # Which dot-path columns to resolve, with their renderer ref for
+    # display rendering (rendererRef is optional — when absent, displayValue
+    # comes back null and the frontend falls back to leafId.toString() or
+    # similar).
+    dotPathColumns: [DotPathColumnInput!]!
+}
+input DirectFieldValueInput {
+    pendingRowIndex: Int!
+    fieldName: String!         # direct field on the row entity (no dots)
+    id: Int                    # nullable — null entries yield null leafId / displayValue
+}
+input DotPathColumnInput {
+    columnKey: String!         # dot-path, e.g. "cameraLensMount.producer"
+    rendererRef: String        # nullable EntityRenderer code
+}
+type ResolvedDotPathValue {
+    pendingRowIndex: Int!      # echoed from input
+    columnKey: String!         # echoed from input
+    leafId: Int                # the resolved entity id, or null when unreachable
+    displayValue: String       # the rendered display string, or null when no rendererRef
+}
+```
+
+N pending rows × M dot-path columns yields N×M response entries (one per
+combination). Single round-trip. The frontend matches each response entry
+back to its row+column via the (`pendingRowIndex`, `columnKey`) tuple.
+
+#### G7.8.3 Backend algorithm
+
+For each `DotPathColumnInput`:
+
+1. Parse `columnKey` into `firstSegment + remainder` (same shape as
+   `columnFilters.md` CF3.4.4's *Algorithm*).
+2. For each `DirectFieldValueInput` whose `fieldName == firstSegment`:
+   - If `id == null` → emit `{ pendingRowIndex, columnKey, leafId: null, displayValue: null }`.
+   - Else: load the first-segment entity by id; walk the `remainder` via
+     JPA traversal (same `walkPath` machinery `FilterExecutor` uses) to
+     reach the leaf entity.
+   - `leafId = leafEntity.id` (or `null` if any mid-path link is null).
+   - If `rendererRef` is set: render the leaf entity via the renderer's
+     Mustache template → `displayValue`. Otherwise null.
+
+Direct columns (no dot in `columnKey`) are also accepted and treated as
+the degenerate case: `firstSegment == columnKey`, no remainder, leafId
+== id, displayValue rendered if `rendererRef` is set. (The frontend
+doesn't need to call this for direct columns since the picker already
+returned the display string — but the endpoint accepts them for
+uniformity.)
+
+#### G7.8.4 Caching and race conditions
+
+- Per-pending-row cache in `_GridFieldState`. Cleared on widget dispose.
+- New rows fetch on first appearance; existing rows reuse cached
+  resolutions across rebuilds.
+- Removed rows drop their cache entries on `didUpdateWidget`.
+- Concurrent fetches: a `_dotPathFetchSeq` sequence number on
+  `_GridFieldState`, same pattern as `_fetchSeq`. Out-of-date responses
+  are silently discarded.
+
+#### G7.8.5 Edit mode (explicit non-applicability)
+
+In edit mode `widget.pendingRows` is empty per the current
+mutual-exclusivity rule (G1.6.8 *Today's reality*). The cache stays
+empty, no requests fire. Committed rows render via the existing backend
+flow (`gridData` returns pre-rendered displayValues for every column,
+including dot-paths). **No observable change in edit mode** — purely
+additive for create-new.
+
+#### G7.8.6 Why lazy at GRID render time, not eager at child-save time
+
+The pending-row creation lives in `app_view.dart` (the EditorStack
+controller), not in `_GridFieldState` (the GRID widget). Eager resolution
+would require plumbing the parent GRID's `tableColumns` and column
+metadata through the editor stack to the child-save callback — extra
+plumbing for one corner case. Lazy GRID-render-time resolution localises
+the work to `_GridFieldState`, which already holds `_columnMeta` and
+already runs `didUpdateWidget` on pending-list changes. PendingChild
+model stays untouched.
+
+#### G7.8.7 Cross-references
+
+- `columnFilters.md` CF1.5.1 — pending-row client-side filter reads via
+  `_effectiveValue`, picking up the cached resolution for dot-path keys
+  transparently.
+- `columnFilters.md` CF2.5 — pending-row client-side sort reads via
+  `_effectiveValue`, same pattern.
+- `columnFilters.md` CF3.4.4 — picker query already handles dot-paths via
+  its own backend subquery; G7.8 is independent of (and complementary to)
+  that mechanism.
+- `gridElement.md` G7.6 — pending children's overall lifecycle, of which
+  G7.8 is a focused supplement covering the dot-path display gap.
 
 ---
 

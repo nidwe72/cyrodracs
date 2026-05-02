@@ -324,6 +324,32 @@ in the table above. The two mechanisms (typeahead in the picker,
 predicate in the filter) operate at different stages; only the latter
 applies to pending-row filtering.
 
+In create-new mode, the picker itself needs CF3.4.4 to surface its
+candidates from pending-row references — without that the user can't
+even enter a value to filter on. CF3.4.4 makes the picker usable;
+CF1.5.1 then takes over the actual row-narrowing.
+
+**Filter survives create-new → edit transition.** When the parent
+entity saves and `entityId` flips from `null` to a real id, the GRID
+re-fetches with the existing `_columnFilters` state still applied.
+The filter the user set in create-new mode (matching only pending
+rows) immediately applies to the now-committed rows after save —
+nothing for the user to re-enter, no confusing "did my filter get
+lost?" moment.
+
+**Dot-path columns on pending rows.** For dot-path column keys
+(e.g. `cameraLensMount.producer`), `pending.values[<dotPathKey>]` is
+undefined — the child editor only stores direct field values. The
+client-side filter resolves dot-path values lazily via the cache
+populated by `gridElement.md` G7.8 (Pending-Row Dot-Path Resolution):
+on filter evaluation, `_pendingMatchesFilters` reads via the
+`_effectiveValue` helper, which falls back to the G7.8 cache for
+dot-path keys. Until the resolution response lands (~50 ms after a
+new pending row appears), pending rows have a null cell for any
+dot-path filter — the predicate treats them as non-matching, same as
+any other null-valued row. After resolution lands, the filter
+re-evaluates correctly.
+
 ### CF1.6 Clear-All Toolbar Action
 
 The grid toolbar (next to the existing Add / Reload buttons) gains a **Clear
@@ -464,25 +490,68 @@ joins the same way `FilterExecutor.walkPath` does).
 
 ### CF2.5 Pending Rows on Embedded GRIDs
 
-Sort changes are evaluated **server-side** — the userSort travels with the
-fetch and the backend's ORDER BY produces the row order. On embedded GRIDs
-this means **pending rows are not reordered by the user sort today**:
-pending rows live only in the frontend and bypass the backend query
-entirely (see `gridElement.md` G7.6 and CF1.5.1's symmetric note for
-filtering).
+Sort changes are evaluated **server-side** in edit mode — the userSort
+travels with the fetch and the backend's ORDER BY produces the row
+order. For pending rows (which live only in the frontend and bypass
+the backend query entirely — see `gridElement.md` G7.6 and CF1.5.1's
+symmetric note for filtering), sort is **applied client-side**: the
+host GRID computes a `Comparator<PendingChild>` from the active
+sort column and direction, applies it inside `_buildPendingTrinaRows()`
+after the existing CF1.5.1 filter step, and TrinaGrid renders the
+already-ordered list.
 
-The asymmetry with CF1.5.1 is intentional v1: the filter case had a
-crisp UX bug (typing a filter and pending rows ignoring it); the sort
-case is less acute (pending rows hold their insertion order, which is a
-defensible default). Closing the gap symmetrically — client-side sort on
-pending rows that mirrors the column's userSort — is queued as a
-follow-up; the predicate-level work would mirror CF1.5.1's per-type
-predicate table, just producing a `Comparator` instead of a `bool`.
+#### CF2.5.1 Per-Type Comparator Table
 
-In **edit mode** (`entityId != null`), pending rows don't exist and this
-note doesn't apply. In **create-new mode** the sort glyph still cycles
-visually on header click, but the rendered pending row order doesn't
-change until the follow-up lands.
+Mirrors CF1.5.1's predicate table — same column-type dispatch, same
+source (`pending.values[<sortColumnKey>]`), same server-semantics
+parity:
+
+| Column type | Comparator on `pending.values[<sortColumnKey>]` |
+|---|---|
+| STRING | case-insensitive lexicographic compare (`a.toLowerCase().compareTo(b.toLowerCase())`) |
+| NUMBER | parse to `num`, numeric compare; unparseable values fall back to lexicographic |
+| DATE / YEAR_MONTH / DATETIME | lexicographic compare on the ISO string (sorts correctly for ISO formats — same trick the backend relies on) |
+| BOOLEAN | `false` < `true` |
+| ENUM | lexicographic compare on the enum constant name (matches the backend's `ORDER BY <field>` behaviour for `EnumType.STRING` columns) |
+| ENTITY_REF | numeric compare on the referenced id (`pending.values[k]` is an entity id) |
+
+Sort direction (ASC / DESC) is applied as a final reverse on the
+ordering, *after* null placement is decided per CF2.5.2.
+
+#### CF2.5.2 Null Handling
+
+Pending rows can have null values on optional columns (e.g. the
+`comment` column added per `domainEntities.md` Task D4 if not filled
+in). Convention:
+
+- **Null sorts last in ASC**.
+- **Null sorts first in DESC**.
+
+Same convention as the backend's default JPA / SQL `NULLS LAST` /
+`NULLS FIRST` handling (with `ORDER BY x ASC NULLS LAST` semantics).
+Concretely: a pending row with `comment = null` always appears at
+the bottom under ASC and at the top under DESC, regardless of how
+the comparator orders non-null values.
+
+#### CF2.5.3 Sort Survives Create-New → Edit Transition
+
+When the parent entity saves and `entityId` flips from `null` to a
+real id, the GRID re-fetches with the existing `_sortColumnKey` /
+`_sortDirection` state still applied — the userSort travels in the
+fetch, server applies it via ORDER BY, the now-committed rows render
+in the same order the user just had under the client-side
+comparator. Mirrors CF1.5.1's filter-survives-save behaviour
+(documented at the end of CF1.5.1).
+
+#### CF2.5.4 Dot-Path Columns
+
+Same gap and same fix as CF1.5.1's dot-path note:
+`pending.values[<dotPathKey>]` is undefined; the comparator reads via
+the `_effectiveValue` helper, which falls back to the
+`gridElement.md` G7.8 cache for dot-path keys. Until G7.8's
+resolution response lands, pending rows compare as null at the
+dot-path key (sorted last in ASC, first in DESC per CF2.5.2). After
+resolution lands the comparator reorders correctly.
 
 ---
 
@@ -1193,6 +1262,308 @@ CF3.5.4, and the runtime already consumes it via
 `PickerCandidatesService.buildTypeaheadPredicate`). The CF3.4.3
 implementation pass extends the existing seed accordingly.
 
+### CF3.4.4 Pending Rows in the Picker Candidate Set
+
+CF3.4.3 restricts the picker's candidate set to entity ids that
+appear in the GRID's **committed** rows (via the inner `SELECT
+DISTINCT row.<columnKey>.id ...` subquery). On embedded GRIDs in
+**create-new mode** there are no committed rows yet — the inner
+DISTINCT returns the empty set → the picker offers zero candidates →
+the user can't even select a value to filter on, even though they
+may have *pending rows* (per `gridElement.md` G7.6) referencing real
+entities they'd want to filter by.
+
+CF3.4.4 closes that gap: the picker candidate-id set is augmented
+with the **referenced committed-entity ids held in pending rows for
+the picker's column**.
+
+#### Critical clarification — what gets sent to the backend
+
+The frontend sends **referenced committed-entity ids held in pending
+rows for the row entity's direct fields** — never the pending rows'
+own (non-existent) ids.
+
+Pending rows are frontend-only `PendingChild` instances; they have
+no DB id of their own. But the entities they *reference* via their
+ENTITY_REF column values (e.g. the `CameraLensMount` selected in the
+child editor's picker) are real, committed DB rows with real ids.
+Those referenced ids are what we send. Concretely, for a pending
+`CameraLensMount2CameraProducer` whose `cameraLensMount` was set to
+M42 (`CameraLensMount#1`):
+
+```
+pending.values["cameraLensMount"] = 1     ← M42's existing committed id
+pending.values["cameraProducer"]   = null ← parent entity has no id yet
+```
+
+The frontend payload covers **direct ENTITY_REF fields on the row
+entity only** (here `cameraLensMount`, plus `cameraProducer` which
+is null in create-new mode). Dot-path column keys (e.g.
+`cameraLensMount.producer`) are handled by the backend traversing
+those direct-field IDs along the dot-path remainder — the frontend
+doesn't need to know about dot-paths at all.
+
+**No id collision** is possible: those ids were assigned by the DB
+when the referenced entities were originally inserted; the frontend
+never invents an id. For the column whose value *is* the still-unsaved
+parent reference (`cameraProducer` on a brand-new producer's GRID),
+`pending.values["cameraProducer"]` is `null` — the frontend filters
+nulls out, so the parent-reference field contributes nothing. That
+is correct: the unsaved parent can't appear as a picker candidate
+because it doesn't exist yet.
+
+#### Algorithm
+
+For the picker column key `K` (which may be a direct field or a
+dot-path), the backend computes the augmentation as follows:
+
+1. Split `K` into `firstSegment` + `remainder`. For `cameraLensMount`
+   alone → `("cameraLensMount", "")`. For `cameraLensMount.producer`
+   → `("cameraLensMount", "producer")`. For deeper paths like
+   `a.b.c.d` → `("a", "b.c.d")`.
+2. Look up the frontend-provided IDs for `firstSegment` (the
+   `directIds` set). If absent or empty, the OR contributes nothing
+   and the picker query reduces to exactly CF3.4.3's.
+3. **If `remainder` is empty** (direct ENTITY_REF column), the
+   `directIds` are themselves the candidate augmentation:
+   ```
+   OR candidate.id IN (:directIds)
+   ```
+4. **If `remainder` is non-empty** (dot-path column), the backend
+   walks the remainder over the row entity's `firstSegment` target
+   type via JPA Criteria, producing a subquery that yields the
+   target-entity IDs:
+   ```
+   OR candidate.id IN (
+     SELECT firstSegmentEntity.<remainder>.id
+     FROM   <firstSegmentTargetType> firstSegmentEntity
+     WHERE  firstSegmentEntity.id IN (:directIds)
+   )
+   ```
+5. The remainder walk uses the same `walkPath` machinery
+   `FilterExecutor` already uses for filter / sort fields — supports
+   arbitrary depth, no special-casing per dot-path length.
+
+The full picker query then becomes:
+
+```
+SELECT candidate FROM <columnTargetType> candidate
+WHERE (
+        candidate.id IN (
+          SELECT DISTINCT row.<columnKey>.id
+          FROM   <rowEntityType> row
+          WHERE  <baseFilter> AND <otherUserFilters>
+        )
+     OR <pendingAugmentationFromStep3or4>      -- omitted when directIds is empty
+)
+AND <typeaheadPredicate>          -- searchFields-based, per CF3.5.1
+ORDER BY <rendererSortFields>, id ASC
+LIMIT <pageSize>
+```
+
+The typeahead (`searchFields` per CF3.5.1) and the ordering
+(`sortFields`) **still apply over the combined candidate pool** —
+the same multi-field match runs against entity rows reached via
+either branch of the OR. No asymmetry between committed-derived and
+pending-derived candidates from the user's perspective. No asymmetry
+between direct and dot-path columns either.
+
+##### Inputs (additions over CF3.4.3)
+
+| Input | Source | Example value (Acme + 2 pending mappings) |
+|---|---|---|
+| `pendingRowDirectValues` | frontend iterates `widget.pendingRows`; for every direct ENTITY_REF column on the row entity, collects the column's IDs across pending rows (drops nulls, dedupes) | `[{fieldName: "cameraLensMount", ids: [1, 3]}]` |
+
+#### Wire change
+
+The existing `entityRefPickerCandidates` request gains one optional
+field:
+
+```graphql
+input PickerCandidatesInput {
+    # ... existing fields ...
+    pendingRowDirectValues: [PendingRowDirectValue!]   # NEW; null/empty → no augmentation
+}
+
+input PendingRowDirectValue {
+    # Name of a DIRECT field on the row entity (no dots).
+    fieldName: String!
+    # Ids of the entities referenced from each pending row's value
+    # for this field (frontend has already deduped and dropped nulls).
+    ids: [Int!]!
+}
+```
+
+When null/empty, the picker behaves exactly as today (CF3.4.3
+unchanged). When non-empty, the augmentation is computed per the
+algorithm above.
+
+#### Canonical examples
+
+Brand-new `CameraProducer` "Acme" (no entityId yet) with two pending
+mappings:
+
+- pending row 1: `cameraLensMount` = M42 (id=1, invented by ZeissIkon id=1)
+- pending row 2: `cameraLensMount` = X-Mount (id=3, invented by Fuji id=4)
+
+Frontend payload (same for both pickers below):
+
+```
+pendingRowDirectValues: [
+  { fieldName: "cameraLensMount", ids: [1, 3] }
+]
+```
+
+##### Example A — Lens Mount column (direct, key = `cameraLensMount`)
+
+User opens the **Lens Mount** column picker.
+
+```
+firstSegment = "cameraLensMount"
+remainder    = ""                                 (direct column)
+directIds    = [1, 3]
+Augmentation : OR candidate.id IN (1, 3)
+```
+
+Inner DISTINCT is empty (no committed mappings). Combined candidate
+id set = `{1, 3}`. Picker shows M42 and X-Mount. User types "X" →
+typeahead narrows via `lensMountCaption.searchFields` → only X-Mount
+remains. User selects X-Mount → column filter becomes
+`cameraLensMount.id == 3` → visible pending rows narrow to row 2
+(CF1.5.1 client-side predicate evaluates this on
+`pending.values["cameraLensMount"]`).
+
+##### Example B — Inventor column (dot-path, key = `cameraLensMount.producer`)
+
+User opens the **Inventor** column picker.
+
+```
+firstSegment = "cameraLensMount"
+remainder    = "producer"                         (dot-path column)
+directIds    = [1, 3]
+Augmentation subquery:
+  SELECT lm.producer.id
+  FROM   CameraLensMount lm
+  WHERE  lm.id IN (1, 3)
+  → yields { ZeissIkon.id (1), Fuji.id (4) }
+Augmentation : OR candidate.id IN (1, 4)
+```
+
+Inner DISTINCT is empty. Combined candidate id set = `{1, 4}` —
+ZeissIkon (M42's inventor) and Fuji (X-Mount's inventor). Picker
+shows ZeissIkon and Fuji. Same typeahead / sort over the combined
+pool. End-to-end the dot-path picker works identically to the direct
+picker from the user's perspective.
+
+##### Example C — empty pending list / parent-reference column
+
+If `pendingRowDirectValues` has no entry for the picker's
+`firstSegment` (e.g. all pending rows have null at that field — the
+`cameraProducer` column on Acme's brand-new GRID), `directIds` is
+empty → augmentation is omitted → picker reduces to CF3.4.3's
+behaviour for the picker column. User-facing: the picker reports
+"no candidates match the current filters" — same wording as the
+empty-restricted-picker case in CF3.4.3.
+
+#### Open-picker invalidation (extends CF3.4.3's list)
+
+CF3.4.3's *Recomputation and invalidation* dismiss list — picker
+closes on other-column user-filter change, navigation, frame
+push/pop, GRID `reloadOnChange` — gains one trigger:
+
+- **Any change to `widget.pendingRows`** while the picker is open
+  (Add via "+", Remove via the pending-row icon). The `pendingRowDirectValues`
+  set just changed; a stale open picker would lie about its
+  candidate pool. Recommended default: close (Excel-autofilter
+  convention); the user re-opens to see the fresh set.
+
+#### Edit-mode behaviour (explicit non-applicability)
+
+In edit mode `widget.pendingRows` is empty per the current
+mutual-exclusivity rule in `_effectiveRows()` (gridElement.md G1.6.8
+*Today's reality*). So `pendingRowDirectValues` is empty, the OR
+contributes no candidates, and the picker query reduces to exactly
+CF3.4.3's. **No observable change in edit mode** — this is purely
+additive for create-new.
+
+If the model ever changes to allow pending and committed rows to
+coexist on the same GRID instance, CF3.4.4's OR composition handles
+it naturally — pending-derived candidates union with committed-derived
+candidates without further changes.
+
+#### Edge cases
+
+- **Overlap between pending and committed.** When a pending row
+  references the same entity that also appears in committed rows
+  (e.g. M42 already committed *and* re-added as a pending mapping),
+  `directIds = [1]` overlaps the inner DISTINCT's `{1, ...}`. SQL
+  `OR` between two `IN` clauses (or between `IN` and a subquery)
+  naturally dedupes — `WHERE id IN (1,2) OR id IN (1)` returns the
+  same rows as `WHERE id IN (1,2)`. No backend or frontend dedup
+  required.
+- **`firstSegment` doesn't match a direct field on the row entity.**
+  Indicates an admin config error — the picker column key references
+  a field that doesn't exist on the GRID's row entity. The backend
+  treats this as "no matching pending IDs" → augmentation omitted,
+  picker reduces to CF3.4.3. The underlying config error surfaces
+  through the existing field-resolution error path (the same
+  `walkPath` failure mode that bad sort or filter keys already hit).
+- **Non-ENTITY_REF columns are out of scope.** STRING / NUMBER /
+  DATE / BOOLEAN / ENUM column filtering for pending rows is
+  already handled client-side by CF1.5.1; those columns have no
+  picker, so CF3.4.4 doesn't apply. Only ENTITY_REF columns gain
+  augmented picker candidates.
+- **Deeper dot-paths.** `a.b.c.d`-style keys traverse via the same
+  `walkPath` JPA Criteria machinery. The remainder walk subquery's
+  shape stays the same; just longer paths. No special-casing per
+  depth.
+- **Dot-path columns: cell display, filter, and sort on pending rows.**
+  CF3.4.4 covers the picker query for dot-path columns, but cell
+  display, client-side filtering (CF1.5.1) and client-side sorting
+  (CF2.5) on pending rows need access to the same resolved leaf
+  values. Those are handled by `gridElement.md` G7.8 (Pending-Row
+  Dot-Path Resolution) — an independent endpoint the GRID calls
+  lazily on pending-row addition. CF3.4.4 and G7.8 are complementary;
+  neither depends on the other.
+
+#### Frontend — collecting `pendingRowDirectValues`
+
+The host GRID computes the payload once per picker request — column-key
+agnostic, so the same payload is sent for every picker on the GRID:
+
+```dart
+List<PendingRowDirectValue> _pendingRowDirectValues() {
+  // For every direct ENTITY_REF column key per _columnMeta, collect
+  // the IDs across widget.pendingRows. Drop nulls; dedupe.
+  final result = <PendingRowDirectValue>[];
+  for (final entry in _columnMeta.entries) {
+    final key = entry.key;
+    if (entry.value.filterType != ColumnFilterType.entityRef) continue;
+    if (key.contains('.')) continue;          // dot-paths handled by backend
+    final ids = <int>{};
+    for (final p in widget.pendingRows) {
+      final v = p.values[key];
+      if (v == null) continue;
+      final n = v is num ? v.toInt() : int.tryParse(v.toString());
+      if (n != null) ids.add(n);
+    }
+    if (ids.isNotEmpty) {
+      result.add(PendingRowDirectValue(fieldName: key, ids: ids.toList()));
+    }
+  }
+  return result;
+}
+```
+
+Sent verbatim as the `pendingRowDirectValues` field of the picker
+request. Reuses the same payload for every picker the user opens on
+this GRID — no per-column recomputation.
+
+#### Timing
+
+Same as CF3.4.3 — runs at picker-open / typeahead-keystroke time,
+not at `columnFilterMetadata` cache time.
+
 ### CF3.5 EntityRenderer — Search Fields and Sort Fields
 
 To drive the typeahead matching and the default ordering of picker
@@ -1353,10 +1724,21 @@ admin-editor surface for `EntityRenderer`.
 
 ### CF3.6 `TableColumn.key` Autoproposal
 
-> **🔜 Next implementation target.** Closes a DX-consistency gap:
-> `TableColumn.key` is the same attribute-dot-path concept as several
-> sibling fields that already have autoproposal, and admins currently
-> have to type it by hand.
+> **🔜 Next: extend existing autocomplete to dot-paths — paired with
+> CF3.4.4.** A single-segment autocomplete for `TableColumn.key`
+> already exists in the admin editor (`_tableColumnKeyField()` in
+> `app_config_detail_panel.dart`); it offers proposals for the *first*
+> attribute segment but accepting one *replaces* the field's text
+> instead of appending — so dot-path keys (`producer.foundationYear`)
+> can't be authored via the dropdown, only by hand. CF3.6 work is to
+> mirror the dot-path-accumulating logic already implemented for
+> ContextBinding (`_buildCompletionList` in the same file) so each
+> accepted segment appends with a `.` and re-fetches proposals for
+> the next segment. Folded into the CF3.4.4 implementation pass so
+> admins can author dot-path picker columns via the autoproposal at
+> the same moment the picker starts handling them correctly (no
+> half-state where the picker is dot-path-aware but admins still have
+> to hand-type the keys).
 
 **Goal.** When configuring a `TableColumn.key` (or `GridTableColumn.key`)
 in the AppConfig admin editor, offer the same attribute-path
@@ -1412,6 +1794,22 @@ this section extends the same mechanism to `TableColumn.key`.
 - `entityRendererRef` — refers to an `EntityRenderer` code in the
   AppConfig. A *different* kind of autoproposal (a registry lookup,
   not a path walk) is appropriate but out of scope for this section.
+
+**`GridTableColumn` parity.** The same autoproposal applies to
+`GridTableColumn.key` (the GRID DataFormElement's column variant —
+different AppConfig typeCode, identical concept). Today the admin
+editor renders the Key / Header / RendererRef editor only when
+`n.isTableColumn` (typeCode == `'TableColumn'`); GridTableColumn
+nodes (typeCode == `'GridTableColumn'`) are not rendered by that
+block at all, so the autoproposal can't appear there even though
+the underlying mechanism exists. CF3.6 implementation extends the
+render condition (and the corresponding save logic — using
+`GridTableColumnKey` / `GridTableColumnHeader` /
+`GridTableColumnRendererRef` typeCodes for child nodes when the
+parent is a `GridTableColumn`) so both column variants get the same
+editor end-to-end. The autoproposal walk in step 2 above already
+mentions both branches (ViewNode → EntityProvider.entityType for
+ENTITY_LIST, DataFormElement → EntityProvider.entityType for GRID).
 
 **Adjacent field worth flagging (not in scope here).**
 `EntityProvider.sortFields[].field` is also a JPA dot-path on the

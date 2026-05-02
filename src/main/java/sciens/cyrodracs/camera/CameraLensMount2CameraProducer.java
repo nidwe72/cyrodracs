@@ -20,6 +20,9 @@ public class CameraLensMount2CameraProducer {
     @JoinColumn(name = "camera_producer_id")
     private CameraProducer cameraProducer;
 
+    @Column(name = "comment", length = 1000)
+    private String comment;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -28,4 +31,7 @@ public class CameraLensMount2CameraProducer {
 
     public CameraProducer getCameraProducer() { return cameraProducer; }
     public void setCameraProducer(CameraProducer cameraProducer) { this.cameraProducer = cameraProducer; }
+
+    public String getComment() { return comment; }
+    public void setComment(String comment) { this.comment = comment; }
 }

@@ -40,6 +40,7 @@ public class GraphQLSchemaConfig {
         gen.addType(ColumnFilterType.class);
         gen.addType(PickerCandidate.class);
         gen.addType(PickerCandidatesPagedResult.class);
+        gen.addType(ResolvedDotPathValue.class);
         gen.addType(EntityOption.class);
         gen.addType(ElementState.class);
         gen.addType(BindingProposalResponse.class);
@@ -96,6 +97,7 @@ public class GraphQLSchemaConfig {
                 gridData(input: GridDataInput!): PagedResult
                 columnFilterMetadata(scope: ColumnFilterScopeInput!): [ColumnFilterMeta!]!
                 entityRefPickerCandidates(input: PickerCandidatesInput!): PickerCandidatesPagedResult!
+                resolveDotPathValues(input: ResolveDotPathValuesInput!): [ResolvedDotPathValue!]!
                 cameras: [Camera]
                 cameraProducers: [CameraProducer]
                 cameraLensMounts: [CameraLensMount]
@@ -165,6 +167,39 @@ public class GraphQLSchemaConfig {
                 size: Int
                 userFilter: FilterNodeInput
                 editorEntityId: Int
+                # CF3.4.4 — pending-row direct field values for picker
+                # candidate augmentation in create-new mode. Null/empty
+                # → no augmentation (CF3.4.3 behaviour).
+                pendingRowDirectValues: [PendingRowDirectValueInput!]
+            }
+            input PendingRowDirectValueInput {
+                # Name of a DIRECT field on the row entity (no dots).
+                fieldName: String!
+                # Ids of the entities referenced from each pending row's
+                # value for this field (frontend dedupes and drops nulls).
+                ids: [Int!]!
+            }
+            # G7.8 — Pending-row dot-path resolution. Backend resolves the
+            # row entity type from (dataFormCode, elementCode) — frontend
+            # doesn't need to know the FQCN.
+            input ResolveDotPathValuesInput {
+                dataFormCode: String!
+                elementCode: String!
+                # Direct field IDs the frontend captured at child-editor
+                # save time, one entry per (pendingRowIndex, fieldName).
+                directValues: [DirectFieldValueInput!]!
+                # Which dot-path columns to resolve, with optional renderer
+                # refs for display rendering.
+                dotPathColumns: [DotPathColumnInput!]!
+            }
+            input DirectFieldValueInput {
+                pendingRowIndex: Int!
+                fieldName: String!
+                id: Int
+            }
+            input DotPathColumnInput {
+                columnKey: String!
+                rendererRef: String
             }
             input MapEntryInput {
                 key: String!
