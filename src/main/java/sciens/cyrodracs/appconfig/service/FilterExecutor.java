@@ -167,6 +167,29 @@ public class FilterExecutor {
     }
 
     /**
+     * Count-only query against the provider's effective filter (static +
+     * injectable, no user filter). Used by the GRID's row-count baseline
+     * (gridElement.md G1.6.9): the badge needs to know how many rows
+     * would match if the user cleared their column filters, which is the
+     * count over the materialised filter without {@code userFilter}.
+     */
+    public long countMatching(EntityProvider provider, Class<?> entityClass,
+                              ExpressionContext context) {
+        FilterNode effectiveFilter = materialiseFilter(provider, context);
+        CriteriaBuilder cb = entityManager.getCriteriaBuilder();
+        CriteriaQuery<Long> countQuery = cb.createQuery(Long.class);
+        Root<?> root = countQuery.from(entityClass);
+        countQuery.select(cb.count(root));
+        if (effectiveFilter != null) {
+            Predicate predicate = buildPredicate(effectiveFilter, root, cb);
+            if (predicate != null) {
+                countQuery.where(predicate);
+            }
+        }
+        return entityManager.createQuery(countQuery).getSingleResult();
+    }
+
+    /**
      * AND-merges two FilterNode trees. Either may be null. Exposed package-wide
      * (was private) so {@link PickerCandidatesService}'s CF3.4.3 path can
      * combine the materialised base filter with the picker's

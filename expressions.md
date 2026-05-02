@@ -3141,6 +3141,146 @@ The unified endpoint from E3.5 remains available and is used for:
 
 ---
 
+## Task E10 — Mandatory DataFormElement Flag
+
+**Goal:** Mark a DataFormElement as mandatory so the form cannot be
+saved unless the user has provided a value. v1 keeps the mechanism
+intentionally simple — a static boolean per element, configured in
+AppConfig. The visibility-rule analogy (E3) shows the *direction* a
+richer "conditional mandatory" feature could take later (see E10.7);
+v1 ships the flat boolean only.
+
+**Immediate target.** Make `Camera.name` mandatory on `cameraForm` —
+see E10.6 below.
+
+### E10.1 DataFormElement Extension
+
+```java
+public class DataFormElement implements Coded {
+    // ... existing fields, including visibilityRule from E3 ...
+
+    /** When true, the element MUST have a non-empty value at save time. Default: false. */
+    boolean mandatory;
+    Long mandatoryNodeId;
+}
+```
+
+Primitive `boolean`, not `Boolean`. There is no third "unknown"
+state — either the element is configured-mandatory or it is not.
+
+### E10.2 AppConfigType Row
+
+| code | parent | fieldName | collection | enum | javaType |
+|---|---|---|---|---|---|
+| `Mandatory` | `DataFormElement` | `mandatory` | false | false | `java.lang.Boolean` |
+
+(`java.lang.Boolean` for the AppConfigType row per the project's
+boxed-types convention; the in-memory model still uses primitive
+`boolean`.)
+
+### E10.3 Default — Always Falls Back to `false`
+
+If the `Mandatory` config node is absent for a `DataFormElement`,
+the field is treated as `false` (not mandatory). This is the common
+case — admins should not have to add a `Mandatory: false` node to
+every element.
+
+`AppConfigTreeBuilder` reads the `Mandatory` child node when present
+and writes its boolean value into `DataFormElement.mandatory`. When
+absent the field stays at its default value (`false`). No "missing
+config" warning is emitted — absence is the prevailing case, not an
+error condition.
+
+### E10.4 Frontend Behaviour
+
+- **Visual indicator.** Mandatory fields render with a clear marker
+  (asterisk after the label) per the project styling rules in
+  `frontendStyling.md`. The marker is shown whenever
+  `mandatory == true`, regardless of the field's current value.
+- **Save validation.** On save, every element with `mandatory == true`
+  AND `visible == true` MUST have a non-empty value. **The save is
+  blocked outright when any such element is empty** — no partial
+  save, no save-with-warnings, no save-and-fix-later. The form
+  remains in edit mode with the user's in-progress values intact;
+  only after every offending field has been given a non-empty value
+  does the save proceed. The save action is **not greyed out** while
+  validation is pending — the user is permitted to click Save to see
+  *which* fields are missing (the inline messages from S6.2 surface
+  on the click).
+- **Validation message placement.** The validation error appears
+  **inline below the offending DataFormElement** — not in a
+  top-of-form summary, not as a toast. The user sees exactly which
+  fields need attention without having to map a generic "fix the
+  highlighted fields" hint back to specific inputs. Suggested
+  wording: *"This field is required."*. The message clears as soon
+  as the user provides a non-empty value (no need to click Save again
+  to see the inline error disappear). For a DataFormElement that is
+  itself a composite (e.g. a GRID), the message renders below the
+  whole composite — the same placement rule applies regardless of
+  element type.
+- **Mandatory + invisible.** When an element is `visible == false`,
+  mandatoriness is ignored — a hidden field cannot block the user
+  from saving. This matches the typical UX intent: "name is required,
+  but only when the section it lives in is shown".
+- **No "dirty" gating.** The mandatoriness check fires at save time,
+  not at field-change time. Inline errors appear after the user
+  attempts to save (and clear as the user provides a value).
+
+### E10.5 Server-Side Validation
+
+The server independently validates `mandatory == true` elements at
+save time — frontend validation is for UX, not security. If the
+frontend somehow submits an empty mandatory value (stale config,
+modified client, race condition), **the server rejects the save**
+with a per-field error keyed by the offending element code; **no
+entity is persisted, no transaction commits**. The shape matches the
+existing constraint-violation error contract (see `gridElement.md`
+G7.7), letting the frontend render the same below-element message
+(per `frontendStyling.md` S6.2) as the client-side check would have.
+
+Same gating semantics as the client: the entity is saved only after
+every mandatory + visible element carries a non-empty value. There
+is no "save partial state and revisit" path.
+
+### E10.6 Worked Example — `Camera.name` Mandatory
+
+Set the `Mandatory` flag on `cameraForm`'s `name` element:
+
+```
+cameraForm
+  └── elements:
+      └── "name" (DataFormElement)
+          └── mandatory: true
+```
+
+That's it. The frontend reads `mandatory: true` from AppConfig at
+form-render time and applies the asterisk marker; on save, an empty
+`name` triggers the inline *"This field is required."* error below
+the field. The same flag drives the server-side check.
+
+### E10.7 Future Extension — Conditional Mandatoriness via BooleanInjectable
+
+`DataFormElement.mandatory` is a static boolean by design. If
+conditional mandatoriness becomes a real requirement ("name is
+required only when type = X"), the natural extension is to make the
+field accept either:
+
+- A static `boolean` (current shape), OR
+- A reference to a `BOOLEAN_VALUE` expression — a `BooleanInjectable`
+  / `IInjectable<Boolean>`, same shape as `VisibilityRule.expressionRef`
+  from E3.
+
+The likely model is a tagged union or a `MandatoryRule` wrapper
+analogous to `VisibilityRule`; the frontend evaluation flow piggybacks
+on E3.5's unified evaluation endpoint exactly the way visibility
+already does. The static boolean would remain the lightweight
+default — no admin should need an expression node just to mark a
+basic required field. **Out of scope for v1** — flagged so the static
+boolean here is understood as a deliberate starting point, not a
+corner the design painted itself into.
+
+---
+
 ## Architecture Summary
 
 ```
@@ -3229,6 +3369,10 @@ E1 (Expression model & tree)              ← Foundation
   │           └── E9 (Client-side evaluation) ← Depends on E3, shifts eligible expressions
   │                 └── signals Dart package     to client-side signal graph (Future)
   │
+  ├── E10 (Mandatory DataFormElement flag)  ← Depends on E1 only (static boolean
+  │     in AppConfig). Future conditional mode via BooleanInjectable would
+  │     additionally depend on E3 (E10.7).
+  │
   ├── E4 (Admin editor)                   ← Depends on E1, uses E6 for proposals
   │     │
   │     └── E8 (Code editor / re_editor)   ← Depends on E4 + E7
@@ -3247,3 +3391,11 @@ E1 (Expression model & tree)              ← Foundation
 - **EntityProvider**: `dataBinding.md` Task 2 — provides entities for GRID
 - **AppConfig tree and seeder**: `appConfig.md` — tree structure and bootstrap
 - **CameraLensMount2CameraProducer**: `domainEntities.md` Task D2 — example entity for GRID
+- **`Camera.name` mandatoriness**: `domainEntities.md` *Camera* — the
+  worked target for E10 (`mandatory: true` set on `cameraForm`'s
+  `name` element).
+- **Frontend mandatoriness marker + below-element validation message**:
+  `frontendStyling.md` — the asterisk-after-label rule and inline
+  error-message placement consumed by E10.4.
+- **Server-side validation error contract**: `gridElement.md` G7.7 —
+  reused by E10.5 for the per-element save-rejection shape.

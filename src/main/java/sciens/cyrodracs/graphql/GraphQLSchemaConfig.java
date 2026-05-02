@@ -241,6 +241,11 @@ public class GraphQLSchemaConfig {
                 page: Int
                 pageSize: Int
                 totalPages: Int
+                # Count of rows matching the effective filter with userFilter
+                # stripped — drives the embedded-GRID row-count badge per
+                # gridElement.md G1.6.9. Populated only by gridData; null on
+                # ENTITY_LIST viewData responses.
+                baselineTotal: Int
             }
             type DataFormDataResult {
                 success: Boolean!

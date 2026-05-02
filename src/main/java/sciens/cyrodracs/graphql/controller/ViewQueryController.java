@@ -50,8 +50,15 @@ public class ViewQueryController {
         String dataFormCode = (String) input.get("dataFormCode");
         String elementCode = (String) input.get("elementCode");
         Long entityId = ((Number) input.get("entityId")).longValue();
-        int page = input.get("page") != null ? ((Number) input.get("page")).intValue() : 0;
-        int size = input.get("size") != null ? ((Number) input.get("size")).intValue() : 10;
+
+        // gridElement.md G1.6.4: when `size` is omitted/null the contract is
+        // "all rows" — embedded GRIDs render every matching row. Page is
+        // forced to 0 in that case (a single unbounded page).
+        boolean unbounded = input.get("size") == null;
+        int size = unbounded ? Integer.MAX_VALUE : ((Number) input.get("size")).intValue();
+        int page = unbounded
+                ? 0
+                : (input.get("page") != null ? ((Number) input.get("page")).intValue() : 0);
 
         @SuppressWarnings("unchecked")
         List<Map<String, String>> formStateEntries = (List<Map<String, String>>) input.getOrDefault("formState", List.of());
@@ -72,7 +79,8 @@ public class ViewQueryController {
                 "totalCount", result.totalCount(),
                 "page", result.page(),
                 "pageSize", size,
-                "totalPages", result.totalPages()
+                "totalPages", result.totalPages(),
+                "baselineTotal", result.baselineTotal()
         );
     }
 }

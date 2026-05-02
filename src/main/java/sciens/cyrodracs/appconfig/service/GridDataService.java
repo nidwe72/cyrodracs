@@ -37,7 +37,10 @@ public class GridDataService {
             List<Map<String, Object>> items,
             long totalCount,
             int page,
-            int pageSize
+            int pageSize,
+            /** Count of rows matching the effective filter with userFilter
+             *  stripped — drives the GRID row-count badge "(N of M)". */
+            long baselineTotal
     ) {
         public int totalPages() {
             return pageSize == 0 ? 0 : (int) Math.ceil((double) totalCount / pageSize);
@@ -98,6 +101,14 @@ public class GridDataService {
         FilterExecutor.PagedResult paged = filterExecutor.executePagedQuery(
                 provider, gridEntityClass, offset, pageSize, context, userFilter, userSort);
 
+        // Baseline count for the row-count badge (gridElement.md G1.6.9).
+        // When userFilter is null, baseline equals totalCount (no second query
+        // needed). Otherwise run a count over the effective filter with
+        // userFilter stripped.
+        long baselineTotal = userFilter == null
+                ? paged.totalCount()
+                : filterExecutor.countMatching(provider, gridEntityClass, context);
+
         // Build column renderers
         Map<String, Template> columnRenderers = new LinkedHashMap<>();
         for (TableColumn col : element.getTableColumns()) {
@@ -121,7 +132,7 @@ public class GridDataService {
             rows.add(row);
         }
 
-        return new GridPagedResult(rows, paged.totalCount(), page, pageSize);
+        return new GridPagedResult(rows, paged.totalCount(), page, pageSize, baselineTotal);
     }
 
     @Transactional

@@ -32,7 +32,7 @@ proprietary mounts (X-Mount, created by Fuji) and adopted foreign mounts (M42, c
 | Shared `ColumnRenderer` utility (dot-path getProperty, Mustache rendering) | Done (G3) |
 | Parameterized `buildTableColumn` in tree builder (DRY) | Done (G4) |
 | Frontend: GRID table rendering in DataForm editor | Done (G1.6) |
-| Frontend: GRID pagination | Done (G1.6) |
+| Frontend: GRID pagination | Done (G1.6) — superseded by G1.6.8 (embedded GRIDs no longer paginate); pagination widget to be removed alongside the vertical-sizing implementation |
 | Frontend: GRID add/edit/delete actions | Done (G5–G7) |
 | Pending children for new parent entities | Done (G7.6) |
 | Generic constraint violation error messages | Done (G7.7) |
@@ -43,6 +43,8 @@ proprietary mounts (X-Mount, created by Fuji) and adopted foreign mounts (M42, c
 | Application-level cascade delete (`ViewDataService`) | Done (SQLite fix) |
 | Application-level unique constraint check (`DataFormPersistenceService`) | Done (SQLite fix) |
 | `ColumnRenderer.buildEntityContext` nested relationship support | Done (Mustache fix) |
+| Embedded-GRID vertical hug-content sizing (G1.6.8) | Pending — next implementation target |
+| Embedded-GRID row-count badge `(N)` / `(N of M)` (G1.6.9) | Pending — ships with G1.6.8 |
 
 ---
 
@@ -170,9 +172,8 @@ Card
         ├── Header row: element label (e.g., "Lens Mounts") + row count badge
         ├── DataTable
         │     ├── columns: from tableColumns[].header
-        │     └── rows: from GRID endpoint response items[]
-        ├── Pagination bar (if totalPages > 1):
-        │     first / prev / page indicator / next / last
+        │     └── rows: all matching rows from GRID endpoint response items[]
+        │           (no pagination on embedded GRIDs — see G1.6.8)
         └── (Future) Action row: Add / Edit / Delete buttons
 ```
 
@@ -182,13 +183,19 @@ Card
    DataForm editor.
 2. On mount (and on reload triggers), it POSTs to:
    ```
-   POST /api/view/grid-data/{dataFormCode}/{elementCode}?page=0&size=10
+   POST /api/view/grid-data/{dataFormCode}/{elementCode}?page=0
    Body: { "entityId": <id>, "formState": { ... } }
    ```
+   The `size` query parameter is **omitted** (or sent as `Integer.MAX_VALUE` /
+   equivalent) — embedded GRIDs fetch all rows of the effective filter in one
+   shot per G1.6.8. The endpoint signature is unchanged; only this caller's
+   parameter use changes.
 3. The `dataFormCode` comes from the parent DataForm's code (e.g., `"cameraProducer"`).
 4. The `elementCode` comes from the GRID DataFormElement's code (e.g., `"lensMountMappings"`).
 5. The response is a `PagedResponse` with `items` (list of row maps), `totalCount`, `page`,
-   `pageSize`, `totalPages`.
+   `pageSize`, `totalPages`. The pagination metadata in the response is **ignored** by
+   embedded GRIDs (rendered count = `items.length` = `totalCount`); ENTITY_LIST
+   surfaces continue to use it.
 
 #### G1.6.3 Column Rendering
 
@@ -208,17 +215,29 @@ The GRID re-fetches data when:
 - **`reloadOnChange` sibling** — when any sibling DataFormElement with `reloadOnChange: true`
   fires an `onChange` event. The parent DataForm editor debounces these (300ms) and passes
   the updated `formState` to all GRID elements for re-fetch.
-- **Pagination** — when the user clicks a pagination button.
+- **Filter / sort change** — any per-column filter input change (debounced per
+  `columnFilters.md` CF1.4) or sort glyph cycle (CF2) re-issues the fetch.
 
 The GRID does NOT fetch in "create new" mode (entityId is null) unless the injectable explicitly
 handles null and returns data.
+
+**No pagination — fetch all rows in one shot.** Embedded GRIDs render every matching row
+of the effective filter (no page splitting, no pagination bar — see G1.6.8). The
+frontend **omits** the `size` query parameter; the backend treats a missing or `null`
+`size` as "all rows" — i.e. the contract is *self-describing*, not driven by a magic
+sentinel like `Integer.MAX_VALUE`. ENTITY_LIST callers continue to send an explicit
+`size` and receive the existing paged behaviour. There is no per-GRID size limit
+specified at this stage; should a real use case surface a producer-entity GRID with a
+problematic row count, a cap (with a "showing first N of M" note) is the natural
+follow-up and is not pre-spec'd here.
 
 #### G1.6.5 Loading / Empty States
 
 | State | Display |
 |---|---|
-| Loading | Centered `CircularProgressIndicator` inside the Card |
-| Empty (0 rows) | "No entries" message |
+| First-load (no rows yet) | Centered `CircularProgressIndicator` inside the Card body |
+| Reload (rows already on screen) | Previous rows stay rendered; the toolbar's Reload icon swaps for a same-sized `CircularProgressIndicator` until the response lands. Layout does not reflow. |
+| Empty (0 rows) | "No entries" message in place of the data-row block |
 | Error (endpoint fails) | Error message with retry button |
 | Create-new mode (no entityId) | "Save the record first to see related entries" |
 
@@ -269,6 +288,200 @@ class GridTableColumn {
   }
 }
 ```
+
+#### G1.6.8 Vertical Sizing
+
+> **🔜 Next implementation target.** Closes a layout gap noticed during
+> the C1 / TrinaGrid migration: embedded GRIDs currently expand to fill
+> the parent's available vertical space, which makes the parent
+> DataForm scroll oddly when the GRID sits among scalar fields. The
+> embedded `lensMountMappings` GRID inside the CameraProducer editor
+> is the canonical example.
+
+**Goal.** The embedded GRID **hugs its content vertically** — its
+height is whatever the toolbar + header + actual rendered rows add up
+to, with **no hard-coded dimensions**. The parent DataForm decides
+its own scroll boundary; the GRID never adds an internal vertical
+scrollbar.
+
+**Effective height.** Sum of:
+
+- Toolbar (Add / Reload / Clear Filters per `columnFilters.md` CF1.6,
+  when present).
+- Header rows: label row (column titles + sort glyph) + filter input
+  row (CF1.1's two-row header).
+- Data-row block — exactly `rowCount × rowHeight`. No `pageSize`
+  reservation, no padding-up to a target row count: just the rows
+  the fetch returned (see *No pagination* below).
+
+There is no pagination bar — embedded GRIDs do not paginate.
+
+**No pagination.** Embedded GRIDs fetch all matching rows of the
+effective filter and render them all (G1.6.4). This means the GRID's
+height tracks the actual data: 3 rows on Fuji's mount mappings →
+3-row-tall data block, 30 rows → 30-row-tall data block. The parent
+DataForm scrolls if the resulting GRID exceeds its viewport, which is
+the conventional behaviour for a tall element inside a scrollable
+form — far more predictable than internal pagination on an embedded
+control.
+
+**State variants.**
+
+- **Empty (0 rows)**: data-row block collapses to a single
+  empty-state row (G1.6.5). The GRID is at its minimum height
+  (toolbar + header + one row).
+- **First-load (no rows yet on screen)**: data-row block shows a
+  centred `CircularProgressIndicator` at the same single-row height.
+  No `pageSize`-tall reservation — the height grows when data lands.
+- **Reload (rows already on screen)**: previous rows stay rendered;
+  the toolbar's Reload icon swaps for a same-sized
+  `CircularProgressIndicator`. Layout does not reflow during the
+  reload window. This is the steady-state filter / sort experience
+  (G1.6.5).
+- **Create-new-mode placeholder** (G1.6.5 *"Save the record first…"*):
+  one row tall.
+
+**No magic numbers.** The data-row height is `rowCount × rowHeight`,
+where `rowHeight` is the TrinaGrid row metric defined in
+`trina_grid_theme.dart` (currently 44, derived from one line of cell
+text + cell padding — content-derived, not arbitrary). The header
+height is the same metric pair (`columnHeight = 88` with the filter
+row, `44` without — same content-derived basis). The GRID host
+introduces no hard-coded heights of its own. The legacy
+`SizedBox(height: 320)` wrapper around the host TrinaGrid (today at
+`form_renderer_view.dart` ~ line 2032) is replaced with the computed
+height; that magic number disappears.
+
+**`rowCount` is the count of effective rows on screen.** In code:
+`rowCount = _effectiveRows().length`. The `noRowsWidget` already only
+fires when `_effectiveRows()` is empty, so the same source of truth
+drives the empty-state message and the height — no new branching
+introduced.
+
+`_effectiveRows()` is filter-aware on both sides: backend-filtered
+committed rows for edit mode, *plus* client-side-filtered pending
+rows from the stacked editor (per G7.6) — see G1.6.9's *Pending rows*
+note and `columnFilters.md` CF1.5 for how the client-side pending
+filter mirrors server semantics.
+
+**Today's reality:** committed and pending rows are *mutually
+exclusive* on a given GRID instance — `_effectiveRows()` returns
+pending in create-new mode (`entityId == null`) and committed in
+edit mode (`entityId != null`). So every concrete row-count today
+falls under exactly one of the two row-source columns below. The
+formula `rowCount = visibleCommitted + visiblePending` works either
+way (one term is always 0); if the model ever changes to allow
+coexistence, the height computation needs no revision.
+
+| Mode | visibleCommitted | visiblePending | GRID body |
+|---|---|---|---|
+| Create-new, no pending | 0 | 0 | one-row-tall (empty-state message) |
+| Create-new, 2 pending, no filter | 0 | 2 | two-row-tall (pending rows render with their pending colouring per S3.3) |
+| Create-new, 2 pending, filter narrows to 1 | 0 | 1 | one-row-tall (the matching pending row) |
+| Edit, no committed (genuinely empty) | 0 | 0 | one-row-tall (empty-state message) |
+| Edit Fuji (3 committed), no filter | 3 | 0 | three-row-tall |
+| Edit Fuji, filter narrows to 1 | 1 | 0 | one-row-tall |
+| Edit producer, 30 committed | 30 | 0 | thirty-row-tall (parent DataForm scrolls if needed) |
+
+**No internal vertical scroll.** The GRID never introduces its own
+vertical scrollbar. Horizontal scroll within the GRID remains as
+today (TrinaGrid handles column overflow when the table is narrower
+than the sum of column widths).
+
+**TrinaGrid integration.** TrinaGrid is a virtualised list and
+*requires* a bounded height from its parent — it cannot shrink-wrap
+to its rows. The host wraps the TrinaGrid widget in a sized box
+whose height is computed per the rules above; the rest of the GRID
+card (toolbar, header, optional empty/loading state) is laid out by
+a `Column` whose intrinsic height equals the sum of its children.
+A small pure helper (e.g. `computeGridBodyHeight(rowCount,
+columnHeight, rowHeight, ...)`) belongs in
+`trina_grid_adapter.dart` so the host call site reads as content,
+not arithmetic.
+
+**Surface scope.** This rule covers the **embedded GRID** inside a
+DataForm only. ENTITY_LIST ViewNodes occupy a top-level scaffold body,
+keep their existing pagination (per the same paged endpoint), and
+continue to fill the available vertical space the conventional way —
+they are not in scope here.
+
+#### G1.6.9 Row-Count Badge
+
+The GRID's panel header (S3.2) shows a small count badge after the
+label, using one of two formats:
+
+| Situation | Badge | Example |
+|---|---|---|
+| Result set is not narrowed by any column filter | `(N)` | `(10)` |
+| A column filter narrows the result set | `(N of M)` | `(2 of 10)` |
+
+**Uniform formula.** The badge is computed from four counts, two
+per row source:
+
+```
+N = visibleCommitted + visiblePending     // rows actually rendered
+M = totalCommitted   + totalPending       // rows that exist regardless of filter
+```
+
+Where:
+- `visibleCommitted` = backend-filtered count of committed rows
+  (today: `_trinaRows.length` after the server applied `userFilter`).
+- `totalCommitted` = baseline count of committed rows — same effective
+  filter as the row fetch but with `userFilter` stripped out (the
+  new `baselineTotal` field on `PagedResponse`).
+- `visiblePending` = client-side-filtered count of pending rows
+  (the same column-filter predicates that drive the backend query,
+  evaluated locally — see *Pending rows* below and `columnFilters.md`
+  CF1.5).
+- `totalPending` = `pendingRows.length` (all pending rows, regardless
+  of any column filter).
+
+In create-new mode (`entityId == null`) `visibleCommitted` and
+`totalCommitted` are both 0; in edit mode `visiblePending` and
+`totalPending` are both 0 (today's mutual-exclusivity per G1.6.8 *Today's
+reality*). The formula degenerates to the right answer in either
+case without mode branching.
+
+**Display rule.** Show `(N of M)` only when `N != M`; otherwise the
+plain `(N)` form, to avoid noise (`(10 of 10)` says nothing). When
+both are 0 the empty-state message owns the slot — no badge.
+
+**Worked examples** (matching G1.6.8's table — every scenario you can
+hit today):
+
+| Scenario | visC | visP | N | totC | totP | M | Badge |
+|---|---|---|---|---|---|---|---|
+| Create-new "Acme", 0 pending | 0 | 0 | 0 | 0 | 0 | 0 | *no badge* |
+| Create-new "Acme", 2 pending, no filter | 0 | 2 | 2 | 0 | 2 | 2 | `(2)` |
+| Create-new "Acme", 2 pending, filter narrows to 1 | 0 | 1 | 1 | 0 | 2 | 2 | `(1 of 2)` |
+| Edit producer, no committed rows | 0 | 0 | 0 | 0 | 0 | 0 | *no badge* |
+| Edit Fuji (3 committed), no filter | 3 | 0 | 3 | 3 | 0 | 3 | `(3)` |
+| Edit Fuji, filter narrows to 1 | 1 | 0 | 1 | 3 | 0 | 3 | `(1 of 3)` |
+| Edit Fuji, filter excludes everything | 0 | 0 | 0 | 3 | 0 | 3 | `(0 of 3)` |
+
+`(0 of 3)` is intentional — it tells the user the empty state is
+filter-induced rather than genuine; clearing the filter restores rows.
+
+**Backend contract.** `PagedResponse` gains a new optional
+`baselineTotal: Long` field. For embedded-GRID responses it is
+populated by an extra count query: same effective filter as the row
+fetch but with `userFilter` stripped out. ENTITY_LIST responses leave
+the field `null`; the field is opt-in per caller. Implementation:
+`GridDataService` runs the existing count query (with `userFilter`,
+gives `totalCount`), then a second count query (without `userFilter`,
+gives `baselineTotal`). Two counts per fetch — negligible cost
+relative to the row fetch itself.
+
+**Pending rows.** Pending rows from the stacked editor (per G7.6)
+**are subject to the same column filters as committed rows**,
+evaluated client-side because the backend has no knowledge of
+pending state. The client predicate matches server semantics per
+`columnFilters.md` CF1.5: STRING `LIKE %v%` (case-insensitive),
+NUMBER / DATE / YEAR_MONTH range, BOOLEAN / ENUM / ENTITY_REF
+equality. Both `visiblePending` (filtered) and `totalPending`
+(unfiltered) feed the badge formula above so a pending row that's
+hidden by the active filter is correctly reflected in
+`N != M` → `(N of M)`.
 
 ---
 

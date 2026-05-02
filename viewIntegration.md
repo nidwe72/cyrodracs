@@ -90,9 +90,12 @@ AppConfig
     │       │       │   ├── key: "producer"
     │       │       │   ├── header: "Producer"
     │       │       │   └── renderer: "producerCaption"
-    │       │       └── "col_releaseYear"
-    │       │           ├── key: "releaseYear"
-    │       │           └── header: "Release Year"
+    │       │       ├── "col_releaseYear"
+    │       │       │   ├── key: "releaseYear"
+    │       │       │   └── header: "Release Year"
+    │       │       └── "col_photoEquipmentMarketSegment"
+    │       │           ├── key: "photoEquipmentMarketSegment"
+    │       │           └── header: "MarketSegment"
     │       ├── "producers" (ViewNode)
     │       │   ├── type: ENTITY_LIST
     │       │   ├── label: "Camera Producers"

@@ -130,7 +130,10 @@ implementation work has shipped. Kept here for historical context.
   `tableColumns` on `DataFormElement`, seeded via `GridTableColumn` type).
 - **Sorting.** `EntityProvider.sortFields` applies server-side ORDER BY. No
   user-facing sort control yet.
-- **Pagination.** Implemented for both surfaces.
+- **Pagination.** Implemented on ENTITY_LIST. Was implemented on
+  embedded GRID too, but is being removed by `gridElement.md` G1.6.8
+  (embedded GRIDs render all rows of the effective filter — no
+  pagination, layout hugs content).
 
 ### Current gaps
 
@@ -274,13 +277,68 @@ The effective WHERE clause is the AND-composition of:
 Order is irrelevant for correctness; AND is commutative. None of the
 configured filters are ever dropped — user filters are purely additive.
 
+#### CF1.5.1 Client-Side Filtering of Pending Rows (Embedded GRID Only)
+
+On embedded GRID surfaces (`gridElement.md`), the **pending rows** held
+by the stacked editor (per `gridElement.md` G7.6 — rows added in a
+child editor frame, not yet persisted) are **subject to the same
+column-filter predicates as committed rows**. Because the backend has
+no knowledge of pending state, the predicate is evaluated **client-side**
+on the frontend, mirroring server semantics per filter type:
+
+| Filter type | Client-side predicate (`values[key]` against the filter input) |
+|---|---|
+| STRING | `LOWER(value).contains(LOWER(filterText))` — case-insensitive `LIKE %v%` |
+| NUMBER | parse value, compare against `from` / `to` (inclusive) |
+| DATE / YEAR_MONTH / DATETIME | parse value, compare against `from` / `to` (inclusive) |
+| BOOLEAN | `value == filterValue` (tristate `true` / `false` / `any`) |
+| ENUM | `value == filterValue` |
+| ENTITY_REF | `value (id) == filterValue (id)` |
+
+The match operates on `pending.values[key]` — the raw column value as
+captured in the child editor — to match the server's behaviour
+(server `LIKE` runs on the raw column, not on a rendered display
+string). For STRING columns this is normally identical to the
+display string anyway.
+
+**Why client-side?** Pending rows aren't in the database. Sending them
+to the server just to be filtered would require a round-trip and a
+representation that doesn't exist in the persistence layer. Local
+evaluation matches the user's mental model ("the filter applies to
+everything I see in this table") and ships with the GRID's existing
+state machine — no protocol changes.
+
+**Why not just exclude pending rows from filtering?** The opposite
+default (pending rows render unfiltered while committed rows are
+filtered) creates the surprising "I typed in a filter but those rows
+ignored me" behaviour. The "user forgets about filtered-out pending
+rows on save" risk is genuine but applies equally to filtered-out
+committed rows; both are signalled by the `(N of M)` row-count badge
+(`gridElement.md` G1.6.9).
+
+ENTITY_REF picker typeahead remains unchanged — it uses
+`EntityRenderer.searchFields` (CF3.5.1) for OR-composed multi-field
+matching to *help the user find* the entity to select. Once selected,
+the column-filter predicate is the single ID-equality match described
+in the table above. The two mechanisms (typeahead in the picker,
+predicate in the filter) operate at different stages; only the latter
+applies to pending-row filtering.
+
 ### CF1.6 Clear-All Toolbar Action
 
 The grid toolbar (next to the existing Add / Reload buttons) gains a **Clear
-Filters** action. It is enabled only when at least one column filter is set.
+Filters** action. It is **visible whenever the GRID has at least one
+filterable column** — independent of edit / create-new mode, because filters
+apply to pending rows too via the client-side path (CF1.5.1). It is
+**enabled** only when at least one column filter is set.
 Clicking it:
 - Resets every column's filter input to its empty state.
-- Triggers a single refetch.
+- In **edit mode**: triggers a single backend refetch (the userFilter has
+  changed).
+- In **create-new mode** (embedded GRID, parent unsaved): triggers a
+  re-render only — no backend call, since there's no parent entity to
+  query against and the only rows on screen are pending. The freshly
+  unfiltered pending row set is computed locally per CF1.5.1.
 - Does **not** clear the active user sort (CF2).
 - Does **not** clear the v2 named filter — named filters have their own
   dismiss control in the toolbar (and in CF8 their own Delete affordance on
@@ -289,11 +347,22 @@ Clicking it:
 The two concerns are independent: **Clear** operates on in-progress inline
 filter editing; **Delete** (CF8) operates on saved named filters.
 
+The same edit-vs-create-new-mode rule applies to **any column filter or
+sort change** that would normally trigger a refetch: in edit mode the
+backend is re-queried; in create-new mode the GRID just re-renders the
+client-side-filtered pending rows.
+
 ### CF1.7 Pagination Reset
 
-Any filter change resets the current page to 0. This applies to each column's
-filter independently and to the clear-all action. Sort changes (CF2) also
-reset to page 0.
+**Applies to ENTITY_LIST surfaces only.** On ENTITY_LIST ViewNodes, any filter
+change resets the current page to 0; this applies to each column's filter
+independently and to the clear-all action. Sort changes (CF2) also reset
+to page 0.
+
+**Embedded GRID surfaces have no pagination** (per `gridElement.md` G1.6.8 —
+embedded GRIDs render all rows of the effective filter in one shot). There
+is no "page 0" to reset to; a filter change re-issues the fetch, and the
+GRID's height tracks the new row count directly.
 
 ### CF1.8 Loading / Empty / Error States
 
@@ -392,6 +461,28 @@ grouped by year").
 
 The sort field is the column's `key` (dot-path supported — the backend walks
 joins the same way `FilterExecutor.walkPath` does).
+
+### CF2.5 Pending Rows on Embedded GRIDs
+
+Sort changes are evaluated **server-side** — the userSort travels with the
+fetch and the backend's ORDER BY produces the row order. On embedded GRIDs
+this means **pending rows are not reordered by the user sort today**:
+pending rows live only in the frontend and bypass the backend query
+entirely (see `gridElement.md` G7.6 and CF1.5.1's symmetric note for
+filtering).
+
+The asymmetry with CF1.5.1 is intentional v1: the filter case had a
+crisp UX bug (typing a filter and pending rows ignoring it); the sort
+case is less acute (pending rows hold their insertion order, which is a
+defensible default). Closing the gap symmetrically — client-side sort on
+pending rows that mirrors the column's userSort — is queued as a
+follow-up; the predicate-level work would mirror CF1.5.1's per-type
+predicate table, just producing a `Comparator` instead of a `bool`.
+
+In **edit mode** (`entityId != null`), pending rows don't exist and this
+note doesn't apply. In **create-new mode** the sort glyph still cycles
+visually on header click, but the rendered pending row order doesn't
+change until the follow-up lands.
 
 ---
 
@@ -1056,14 +1147,22 @@ junction tables than CF3.4.1's projection ever could on those tables.
 - **ENUM columns are not restricted by visible rows.** ENUM picker
   semantics in v1 are **static** — every declared enum constant is
   always offered, regardless of which values currently appear in the
-  GRID's rows. This is asymmetric with ENTITY_REF columns (which CF3.4.3
-  *does* tighten) and admins WILL ask why their `Inventor` picker
-  collapses to two candidates while a sibling `Status` enum picker
-  keeps offering all five constants. The asymmetry is intentional in
-  v1: ENUM values are a small fixed set, the cost of "show all
-  constants" is trivial, and the static behavior is predictable.
-  Restricting ENUM values via the same DISTINCT-from-rows approach
-  is a defensible future polish, not in scope here.
+  surface's rows. This is asymmetric with ENTITY_REF columns (which
+  CF3.4.3 *does* tighten) and admins WILL ask why their `Inventor`
+  picker collapses to two candidates while a sibling enum picker keeps
+  offering every constant. The asymmetry is intentional in v1: ENUM
+  values are a small fixed set, the cost of "show all constants" is
+  trivial, and the static behavior is predictable. Restricting ENUM
+  values via the same DISTINCT-from-rows approach is a defensible
+  future polish, not in scope here.
+
+  *Canonical use case for the future work* —
+  `Camera.photoEquipmentMarketSegment` (`PhotoEquipmentMarketSegment`,
+  see `domainEntities.md` Task D3). Filtering the `cameras`
+  ENTITY_LIST by producer should produce a visibly-restricted segment
+  dropdown (Polaroid → mostly `ENTRY_LEVEL`; Hasselblad → mostly
+  `PROFESSIONAL`; Fuji spans 3–4 tiers). Today the dropdown ignores
+  the row filter and offers all four constants regardless.
 
 #### Future considerations
 
@@ -1783,6 +1882,12 @@ protocol round-trip.
   require column-filter changes.
 - **GraphQL**: `graphql.md`. All protocol extensions in CF3, CF4, CF8 use
   the existing code-first GraphQL pipeline.
+- **Domain entities**: `domainEntities.md`. Camera-domain JPA model
+  consumed throughout this spec — `CameraProducer`, `CameraLensMount`,
+  `CameraLensMount2CameraProducer`, `Camera`. The
+  `PhotoEquipmentMarketSegment` enum (Task D3) is the canonical
+  example for the future ENUM picker-restriction work flagged in
+  CF3.4.3 *Known limitations*.
 - **Selectable GRID** (future): `specifications.md` pending item.
   Extends CF3.4.1's projection to execute `FilterInjectable`s at
   picker-open time when a GRID is used as a form field's picker source.

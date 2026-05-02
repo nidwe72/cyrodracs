@@ -26,6 +26,7 @@ these two files.
 | GRID panel pattern (header bar + table body) | Done (S3) |
 | ENTITY_LIST table styling consistency | Done (S4) |
 | Migrate existing magic numbers | Pending (S5, low priority) |
+| Mandatory marker + below-element validation message | Pending (S6) |
 
 ---
 
@@ -296,6 +297,111 @@ constants from the start; existing code is migrated opportunistically.
 
 ---
 
+## Task S6 — DataFormElement Mandatory Marker & Validation Message
+
+**Goal:** Define the visual rules for a mandatory `DataFormElement` —
+the asterisk-after-label marker and the inline validation error
+message rendered below the element when a save is rejected for
+mandatoriness. These are the styling-side commitments referenced from
+`expressions.md` E10.4.
+
+### S6.1 Mandatory Marker
+
+**When shown.** Whenever the element's `mandatory` flag (per
+`expressions.md` E10) is `true` AND the element is currently
+`visible`. Driven solely by config — independent of whether the
+field is currently filled in.
+
+**Placement.** A red asterisk (`*`) immediately after the label text,
+separated by a single space. The asterisk participates in the
+label's text widget (same `RichText` or `Text.rich`) so it tracks
+label wrapping and weight changes.
+
+**Style.**
+
+```dart
+// Add to AppTheme (S2):
+static const Color mandatoryMarkerColor = Color(0xFFC92A2A);  // red, AAA-contrast on white
+
+static const TextStyle mandatoryMarker = TextStyle(
+  color: mandatoryMarkerColor,
+  fontWeight: FontWeight.w700,
+  // fontSize inherited from the surrounding label
+);
+```
+
+The asterisk is **only** the visual cue — it does not double as a
+tap target, does not show a tooltip, does not animate. Discoverability
+beyond the asterisk is the validation message's job (S6.2), not the
+marker's.
+
+### S6.2 Below-Element Validation Message
+
+**When shown.** After the user attempts to save and the element fails
+the `mandatory && visible && empty` check, OR after the server
+rejects a save for the same reason (per E10.5).
+
+**Placement.** Inline, immediately **below the offending
+DataFormElement**, inside the same horizontal bounds as the element's
+input widget — so the message visually attaches to the field it
+applies to. **Not** a top-of-form summary, **not** a snackbar,
+**not** a toast. For composite elements (e.g. a GRID), the message
+renders below the whole composite at its left edge.
+
+**Wording.** Suggested default: *"This field is required."* —
+identical wording across element types. Future per-element overrides
+are out of scope for S6.
+
+**Style.**
+
+```dart
+// Add to AppTheme (S2):
+static const Color validationErrorColor = mandatoryMarkerColor;  // re-uses the marker red
+static const EdgeInsets validationMessagePadding =
+    EdgeInsets.only(top: spacingXs, left: spacingXs);
+
+static const TextStyle validationMessage = TextStyle(
+  color: validationErrorColor,
+  fontSize: 12,
+  fontWeight: FontWeight.w400,
+  height: 1.2,
+);
+```
+
+`fontSize: 12` is one step below the surrounding form-input text so
+the message reads as supporting copy, not as another input. The
+`top` padding (`spacingXs = 4`) keeps the message tight against the
+input without touching its border.
+
+**Lifecycle.**
+
+- Appears on first failed save attempt for that element.
+- Stays visible while the offending value remains empty — re-clicking
+  Save does not toggle it off and back on.
+- Clears as soon as the user provides a non-empty value (the form's
+  field-change listener clears the per-field error). The user does
+  not need to click Save again to make the message disappear.
+- A successful save clears all per-field errors regardless of source.
+
+### S6.3 Server-Rejected Save (Race / Stale Config)
+
+When the server rejects a save with the per-field constraint error
+shape (E10.5, reusing `gridElement.md` G7.7), the frontend renders
+the same below-element message — same placement, same style — keyed
+by the element code in the error response. The user cannot
+distinguish a client-side check from a server-side check; both look
+identical, intentionally.
+
+### S6.4 Interaction with Other Inline Errors
+
+The mandatoriness message shares its slot with any other per-element
+error (e.g. type-conversion failures, future custom validators).
+Only one message is shown per element at a time; mandatoriness
+takes priority because it is the most actionable ("fill it in")
+relative to other errors that often require deeper interpretation.
+
+---
+
 ## Task Dependency Order
 
 ```
@@ -303,11 +409,13 @@ Task S1 (ThemeData)          ← Foundation: global Material styling
 Task S2 (AppTheme class)     ← Foundation: custom constants
   ├── Task S3 (GRID panel)   ← Depends on S1 + S2
   ├── Task S4 (ENTITY_LIST)  ← Depends on S1 + S2
-  └── Task S5 (migration)    ← Depends on S2, low priority
+  ├── Task S5 (migration)    ← Depends on S2, low priority
+  └── Task S6 (mandatory marker + validation msg) ← Depends on S2;
+        ships alongside the E10 implementation
 ```
 
 S1 and S2 can be done in parallel. S3 and S4 can be done in parallel after S1+S2.
-S5 is ongoing/incremental.
+S5 is ongoing/incremental. S6 ships with the E10 backend work.
 
 ---
 
@@ -316,3 +424,8 @@ S5 is ongoing/incremental.
 - **GRID element**: `gridElement.md` Task G1.6 (frontend rendering)
 - **ENTITY_LIST table**: `viewIntegration.md` Task V3 (frontend dynamic AppView)
 - **ThemeData base**: `main.dart` (existing theme configuration)
+- **Mandatory flag (semantics)**: `expressions.md` Task E10 — the backend
+  spec that drives the asterisk + below-element message. S6 is the
+  presentation half of that contract.
+- **Server-side per-field error contract**: `gridElement.md` G7.7 —
+  reused by E10.5 / S6.3 for save-rejection messaging.
